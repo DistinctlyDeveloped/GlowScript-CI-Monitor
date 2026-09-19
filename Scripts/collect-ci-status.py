@@ -81,7 +81,7 @@ def collect(host):
             else:
                 # Windows OpenSSH's default shell requires a quoted WSL command.
                 remote = 'wsl.exe -d GlowScript-CI -u root --exec /usr/bin/python3 -c "' + python + '"'
-            args = ['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', target, remote]
+            args = ['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'ClearAllForwardings=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', target, remote]
             data = subprocess.check_output(args, timeout=22, stderr=subprocess.DEVNULL)
         probe = json.loads(data)
         result.update(state=classify(probe), runnerNames=probe['runnerNames'], memoryUsage=probe['memoryUsage'])
