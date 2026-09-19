@@ -79,8 +79,12 @@ def collect(host):
             if host['id'] == 'studio':
                 remote = '/usr/bin/env DEVELOPER_DIR=/Library/Developer/CommandLineTools /usr/bin/python3 -c ' + shlex.quote(python)
             else:
-                # Windows OpenSSH's default shell requires a quoted WSL command.
-                remote = 'wsl.exe -d GlowScript-CI -u root --exec /usr/bin/python3 -c "' + python + '"'
+                # Listing running distros does not start one. Never wake a stopped CI VM just to monitor it.
+                stopped = json.dumps({'service': False, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': []})
+                ps = "$names = @(& wsl.exe --list --running --quiet | ForEach-Object { ($_ -replace \"`0\", '').Trim() }); "
+                ps += "if ($names -notcontains 'GlowScript-CI') { Write-Output '" + stopped + "'; exit 0 }; "
+                ps += "& wsl.exe -d GlowScript-CI -u root --exec /usr/bin/python3 -c '" + python.replace("'", "''") + "'"
+                remote = 'powershell.exe -NoProfile -EncodedCommand ' + base64.b64encode(ps.encode('utf-16le')).decode()
             args = ['/usr/bin/ssh', '-o', 'BatchMode=yes', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'ClearAllForwardings=yes', '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=5', '-o', 'ConnectionAttempts=1', target, remote]
             data = subprocess.check_output(args, timeout=22, stderr=subprocess.DEVNULL)
         probe = json.loads(data)
