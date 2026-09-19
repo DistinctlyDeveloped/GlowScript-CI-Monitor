@@ -18,7 +18,7 @@ import time
 HOSTS = [
     {'id': 'studio', 'name': 'Studio', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
     {'id': 'simrig', 'name': 'SimRig', 'expectedLanes': 1, 'cpuPerLane': 4, 'memoryGiBPerLane': 16},
-    {'id': 'macbook', 'name': 'MacBook', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
+    {'id': 'macbook', 'name': 'MacBook', 'expectedLanes': 3, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
 ]
 
 # Executed only by this collector on fixed, authorized hosts. Never provided by API data.
