@@ -7,7 +7,8 @@ struct GitHubActionsBarApp: App {
     var body: some Scene {
         MenuBarExtra {
             MainPopoverView(viewModel: viewModel)
-                .frame(width: 400, height: 500)
+                .frame(width: min(920, (NSScreen.main?.visibleFrame.width ?? 1000) - 40),
+                       height: min(720, (NSScreen.main?.visibleFrame.height ?? 800) - 60))
         } label: {
             MenuBarLabel(repoStatuses: viewModel.repoStatuses, pulsePhase: viewModel.pulsePhase)
         }

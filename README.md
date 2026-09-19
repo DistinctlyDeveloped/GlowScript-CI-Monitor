@@ -83,3 +83,36 @@ Questions, bug reports, or feature requests? Open an [issue](https://github.com/
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+## Local CI dashboard (Robert's build)
+
+The existing click-to-open menu-bar interaction is preserved. The panel is now
+920 × 720 points (clamped to the current display), with three local host cards,
+workflow filters for all branches/main/pull requests, and active/failed/all jobs.
+Job rows include actual runner location, branch, short revision, current step,
+and a direct GitHub link. An unassigned ARM64 job is labeled **ARM64 pool**, since
+both Studio and MacBook serve that label.
+
+GitHub still uses the existing read-only Actions token in Keychain. No runner
+administration permission is added. Workflow history is bounded to the latest
+50 runs per selected repository; job detail refreshes at most every 30 seconds
+for up to 12 runs (active runs first), with up to 100 jobs per run. Counts are
+explicitly sampled, not repository-wide totals. Failed refreshes retain a visibly
+stale snapshot instead of implying an empty queue. This is operational visibility,
+not a billing report.
+
+`Scripts/collect-ci-status.py` is a separate read-only collector for the fixed
+Studio, SimRig and MacBook configuration. It inspects supervisor health, Docker
+runner counts/memory, pause markers and MacBook power state using existing,
+host-key-verified SSH identities. It never reads GitHub credentials, job files,
+container environment or logs, and cannot register, stop or restart jobs.
+`python3 Scripts/install-ci-monitor.py` installs it as the current user's
+`com.glowscript.octowatch-ci-status` LaunchAgent, every 30 seconds at login.
+The app reads only `~/Library/Application Support/Octowatch/ci-status.json`.
+Snapshots older than two minutes are marked stale. A missing SSH response means
+**Unreachable**; it does not assert that the machine is powered off.
+
+Validation: `swift test`, `python3 Scripts/test_ci_monitor.py`, and
+`bash Scripts/bundle.sh`. Keep a backup of the previous application bundle before
+installing a local build. The collector is independent of the CI supervisors;
+stopping its LaunchAgent stops monitoring only.

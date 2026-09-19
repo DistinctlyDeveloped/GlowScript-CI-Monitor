@@ -10,6 +10,7 @@ let package = Package(
         .executableTarget(
             name: "Octowatch",
             path: "Sources/GitHubActionsBar"
-        )
+        ),
+        .testTarget(name: "OctowatchTests", dependencies: ["Octowatch"], path: "Tests/OctowatchTests")
     ]
 )

@@ -50,6 +50,7 @@ struct WorkflowRun: Codable, Sendable, Identifiable {
     let repository: RunRepository?
     let event: String?
     let displayTitle: String?
+    let pullRequests: [RunPullRequest]?
 }
 
 struct HeadCommit: Codable, Sendable {
@@ -115,4 +116,8 @@ struct RepoStatusItem: Identifiable, Sendable, Equatable {
     let initial: Character
     let status: AggregateStatus
     var id: String { repoFullName }
+}
+
+struct RunPullRequest: Codable, Sendable {
+    let number: Int
 }

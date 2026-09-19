@@ -33,10 +33,7 @@ struct MainPopoverView: View {
                 errorBanner(error)
             }
 
-            WorkflowRunListView(
-                runs: viewModel.runs,
-                isLoading: viewModel.isLoading
-            )
+            CIDashboardView(viewModel: viewModel)
 
             Divider()
 

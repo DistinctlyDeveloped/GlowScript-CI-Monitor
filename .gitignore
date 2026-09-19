@@ -2,3 +2,7 @@
 .swiftpm/
 *.app
 .DS_Store
+
+# Local Python monitor checks
+__pycache__/
+*.pyc

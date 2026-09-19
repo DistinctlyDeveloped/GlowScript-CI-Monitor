@@ -17,11 +17,17 @@ struct WorkflowRunRow: View {
                     .frame(width: 10)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(run.displayTitle ?? run.name ?? "Workflow")
+                    Text(run.name ?? "Workflow")
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
 
+                    if let title = run.displayTitle {
+                        Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     HStack(spacing: 4) {
+                        if let number = run.pullRequests?.first?.number {
+                            Text("PR #\(String(number))").foregroundStyle(.secondary)
+                        }
                         if let repoName = run.repository?.fullName {
                             Text(repoName)
                                 .foregroundStyle(.secondary)

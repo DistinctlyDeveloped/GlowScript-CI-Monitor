@@ -37,7 +37,7 @@ actor GitHubAPIClient {
         -> WorkflowRunsResponse
     {
         var queryItems = [
-            URLQueryItem(name: "per_page", value: "15")
+            URLQueryItem(name: "per_page", value: "50")
         ]
         if let branch {
             queryItems.append(URLQueryItem(name: "branch", value: branch))
@@ -70,6 +70,13 @@ actor GitHubAPIClient {
         }
     }
 
+    func fetchJobs(repository: String, runID: Int64, token: String) async throws -> CIJobsResponse {
+        // Each run is independently bounded; the UI identifies this as sampled job detail.
+        let request = makeRequest(path: "/repos/\(repository)/actions/runs/\(runID)/jobs",
+            queryItems: [URLQueryItem(name: "per_page", value: "100"), URLQueryItem(name: "filter", value: "latest")], token: token)
+        return try await perform(request)
+    }
+
     // MARK: - Helpers
 
     private func makeRequest(
@@ -80,6 +87,7 @@ actor GitHubAPIClient {
             components.queryItems = queryItems
         }
         var request = URLRequest(url: components.url!)
+        request.timeoutInterval = 20
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -116,6 +124,7 @@ actor GitHubAPIClient {
             if let url = request.url,
                 let etag = httpResponse.value(forHTTPHeaderField: "ETag")
             {
+                if etagCache.count >= 128 { etagCache.removeAll() }
                 etagCache[url] = (etag: etag, data: data)
             }
         }

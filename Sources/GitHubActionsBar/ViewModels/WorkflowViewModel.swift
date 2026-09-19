@@ -16,6 +16,17 @@ final class WorkflowViewModel {
     var aggregateStatus: AggregateStatus = .idle
     var repoStatuses: [RepoStatusItem] = []
     var pulsePhase: Bool = false
+    var localSnapshot: CIHostSnapshot?
+    var localStatusError: String?
+    var trackedJobs: [TrackedCIJob] = []
+    var jobsError: String?
+    var lastJobsRefresh: Date?
+    var lastRefresh: Date?
+    var detailedRunCount = 0
+    var jobsTruncated = false
+    private var fetching = false
+    private let localCI = LocalCIService()
+
 
     // MARK: - Settings (persisted)
 
@@ -93,6 +104,9 @@ final class WorkflowViewModel {
         isAuthenticated = false
         username = ""
         runs = []
+        trackedJobs = []
+        lastJobsRefresh = nil
+        lastRefresh = nil
         repos = []
         aggregateStatus = .idle
         repoStatuses = []
@@ -127,14 +141,23 @@ final class WorkflowViewModel {
     }
 
     func fetchRuns() async {
-        guard let token else { return }
+        guard let token, !fetching else { return }
+        fetching = true
+        defer { fetching = false }
         errorMessage = nil
+        do { localSnapshot = try await localCI.read(); localStatusError = nil }
+        catch { localStatusError = "Local host feed unavailable" }
+
 
         let activeRepos = repos.filter { selectedRepoFullNames.contains($0.fullName) }
-        let repoTuples = activeRepos.map { (owner: $0.owner.login, repo: $0.name, branch: $0.defaultBranch) }
+        let repoTuples = activeRepos.map { (owner: $0.owner.login, repo: $0.name, branch: Optional<String>.none) }
 
         guard !repoTuples.isEmpty else {
             runs = []
+            trackedJobs = []
+            detailedRunCount = 0
+            lastJobsRefresh = nil
+            jobsError = nil
             aggregateStatus = .idle
             repoStatuses = []
             return
@@ -143,10 +166,15 @@ final class WorkflowViewModel {
         do {
             let newRuns = try await apiClient.fetchAllWorkflowRuns(
                 repos: repoTuples, token: token)
+            guard self.token == token, isAuthenticated else { return }
             detectCompletions(newRuns: newRuns)
             runs = newRuns
             aggregateStatus = computeAggregateStatus(newRuns)
             repoStatuses = computeRepoStatuses(newRuns)
+            lastRefresh = .now
+            if lastJobsRefresh == nil || Date().timeIntervalSince(lastJobsRefresh!) >= 30 {
+                await fetchJobDetails(newRuns, token: token)
+            }
 
             if let remaining = await apiClient.rateLimitRemaining, remaining < 100 {
                 errorMessage = "Rate limit low: \(remaining) requests remaining"
@@ -156,7 +184,36 @@ final class WorkflowViewModel {
         }
     }
 
+    private func fetchJobDetails(_ runs: [WorkflowRun], token: String) async {
+        // Bound API cost. Active runs first, then recent completed runs; never label this as a whole-repo census.
+        let ordered = runs.filter { $0.status != .completed } + runs.filter { $0.status == .completed }
+        let selected = Array(ordered.prefix(12))
+        var result: [TrackedCIJob] = []
+        var failures = 0
+        var truncated = false
+        for run in selected {
+            guard let repository = run.repository?.fullName else { continue }
+            do {
+                let response = try await apiClient.fetchJobs(repository: repository, runID: run.id, token: token)
+                result += response.jobs.map { TrackedCIJob(job: $0, run: run) }
+                truncated = truncated || response.totalCount > response.jobs.count
+            } catch { failures += 1 }
+        }
+        // Keep a failed refresh visibly stale instead of reporting a false empty queue.
+        guard self.token == token, isAuthenticated else { return }
+        if failures == 0 {
+            trackedJobs = result
+            detailedRunCount = selected.count
+            jobsTruncated = truncated
+            lastJobsRefresh = .now
+            jobsError = nil
+        } else {
+            jobsError = "Job detail refresh incomplete; showing the last successful snapshot."
+        }
+    }
+
     func refresh() {
+        lastJobsRefresh = nil
         Task { await fetchRuns() }
     }
 
