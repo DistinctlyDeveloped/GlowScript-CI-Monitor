@@ -5,9 +5,9 @@
     <key>CFBundleIdentifier</key>
     <string>com.hugobourget.Octowatch</string>
     <key>CFBundleName</key>
-    <string>Octowatch</string>
+    <string>GlowScript CI Monitor</string>
     <key>CFBundleDisplayName</key>
-    <string>Octowatch</string>
+    <string>GlowScript CI Monitor</string>
     <key>CFBundleExecutable</key>
     <string>Octowatch</string>
     <key>CFBundlePackageType</key>

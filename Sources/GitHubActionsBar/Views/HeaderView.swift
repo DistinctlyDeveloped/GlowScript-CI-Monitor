@@ -7,7 +7,7 @@ struct HeaderView: View {
 
     var body: some View {
         HStack {
-            Text("Octowatch")
+            Text("GlowScript CI Monitor")
                 .font(.headline)
 
             Spacer()

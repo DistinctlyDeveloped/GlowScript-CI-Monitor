@@ -1,4 +1,6 @@
-# Octowatch
+# GlowScript CI Monitor
+
+A fork of [Octowatch](https://github.com/hbourget/Octowatch) with a local CI host dashboard for the GlowScript runners.
 
 A lightweight, native macOS menu bar app that monitors your GitHub Actions workflow runs in real time.
 

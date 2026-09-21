@@ -12,7 +12,7 @@ struct SignInView: View {
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
 
-            Text("Octowatch")
+            Text("GlowScript CI Monitor")
                 .font(.title2.bold())
 
             Text("Enter a Personal Access Token\nwith **repo** and **workflow** scopes.")
