@@ -17,6 +17,7 @@ struct MainPopoverView: View {
             }
         }
         .background(.ultraThinMaterial)
+        .panelCorners()
     }
 
     private var authenticatedContent: some View {

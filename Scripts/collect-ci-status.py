@@ -73,7 +73,8 @@ def collect(host):
             args = ['/usr/bin/python3', '-c', PROBE, 'macbook']
             data = subprocess.check_output(args, timeout=20, stderr=subprocess.DEVNULL)
         else:
-            target = 'bobbuilder@Bobs-Mac-Studio.local' if host['id'] == 'studio' else 'rober@100.121.29.119'
+            # 'bobs-mac-studio' resolves over Tailscale MagicDNS; the .local mDNS name only works on the same LAN.
+            target = 'bobbuilder@bobs-mac-studio' if host['id'] == 'studio' else 'rober@100.121.29.119'
             payload = base64.b64encode(PROBE.encode()).decode()
             python = "import base64,sys;sys.argv=['probe',%r];exec(base64.b64decode(%r))" % (host['id'], payload)
             if host['id'] == 'studio':
