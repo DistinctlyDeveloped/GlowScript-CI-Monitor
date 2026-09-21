@@ -1,5 +1,5 @@
 APP_NAME := Octowatch
-APP_BUNDLE := $(APP_NAME).app
+APP_BUNDLE := GlowScript\ CI\ Monitor.app
 BIN_PATH := $(shell swift build -c release --show-bin-path 2>/dev/null)
 
 .PHONY: build release bundle run open clean

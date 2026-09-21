@@ -3,8 +3,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-APP_NAME="Octowatch"
-APP_BUNDLE="$PROJECT_DIR/$APP_NAME.app"
+APP_NAME="Octowatch"  # SwiftPM product / executable name
+BUNDLE_NAME="GlowScript CI Monitor"
+APP_BUNDLE="$PROJECT_DIR/$BUNDLE_NAME.app"
 
 echo "Building $APP_NAME (release)..."
 cd "$PROJECT_DIR"
