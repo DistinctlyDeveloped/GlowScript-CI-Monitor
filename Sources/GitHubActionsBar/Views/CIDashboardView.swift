@@ -84,9 +84,12 @@ struct CIDashboardView: View {
             if let snapshot = viewModel.localSnapshot {
                 let stale = snapshot.isStale(at: now) || viewModel.localStatusError != nil
                 if !stale && !snapshot.activeAlerts.isEmpty { alertBanner(snapshot.activeAlerts, now: now) }
+                // Every card reserves the same rows (the largest lane count across hosts) and the three
+                // share one height and width, so the row never reflows as runners come and go.
+                let slots = snapshot.hosts.map { max($0.expectedLanes, $0.lanes?.count ?? 0) }.max() ?? 0
                 HStack(alignment: .top, spacing: 10) {
-                    ForEach(snapshot.hosts) { host in hostCard(host, stale: stale, now: now) }
-                }
+                    ForEach(snapshot.hosts) { host in hostCard(host, stale: stale, now: now, laneSlots: slots) }
+                }.fixedSize(horizontal: false, vertical: true)
                 if stale {
                     Label("Host snapshot is stale. Current availability is unknown.", systemImage: "exclamationmark.clock")
                         .font(.caption).foregroundStyle(.orange)
@@ -173,42 +176,59 @@ struct CIDashboardView: View {
         seconds >= 3600 ? "\(seconds / 3600)h \((seconds % 3600) / 60)m" : "\(seconds / 60)m"
     }
 
-    private func hostCard(_ host: CIHost, stale: Bool, now: Date) -> some View {
+    private func hostCard(_ host: CIHost, stale: Bool, now: Date, laneSlots: Int) -> some View {
         let unreachable = stale || host.state == "Unreachable"
         let label = stale ? "Stale" : (host.isDegraded ? "Degraded" : host.state)
         let alarming = stale || host.isDegraded || ["Unreachable", "Stopped", "Docker unavailable"].contains(host.state)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Image(systemName: host.id == "macbook" ? "laptopcomputer" : "desktopcomputer")
-                Text(host.name).font(.subheadline.weight(.semibold))
+                Text(host.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text(label).font(.caption.weight(.medium))
                     .foregroundStyle(host.isDegraded && !stale ? Color.red : (alarming ? Color.orange : Color.secondary))
             }
             Text("\(unreachable ? "—" : String(host.onlineLanes)) / \(host.expectedLanes) lanes online\(host.lanes == nil ? " (containers)" : "")")
-                .font(.callout.monospacedDigit())
-            if let proxy = host.proxy, !unreachable {
-                Text(proxy.isHealthy ? "Proxy running" : "Proxy \(proxy.looping == true ? "restart loop" : proxy.state) · \(proxy.restarts) restarts")
-                    .font(.caption).foregroundStyle(proxy.isHealthy ? Color.secondary : Color.red)
+                .font(.callout.monospacedDigit()).lineLimit(1)
+            Group {
+                if let proxy = host.proxy, !unreachable {
+                    Text(proxy.isHealthy ? "Proxy running" : "Proxy \(proxy.looping == true ? "restart loop" : proxy.state) · \(proxy.restarts) restarts")
+                        .foregroundStyle(proxy.isHealthy ? Color.secondary : Color.red)
+                } else {
+                    Text("Proxy —").foregroundStyle(.tertiary)
+                }
+            }.font(.caption).lineLimit(1)
+            let lanes = unreachable ? [] : (host.lanes ?? [])
+            ForEach(lanes) { lane in laneRow(lane, now: now) }
+            if lanes.isEmpty {
+                Text(unreachable ? "Lane status unknown" : (host.runnerNames.isEmpty ? "No runner containers observed" : "Lane detail not reported yet"))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            if let lanes = host.lanes, !unreachable {
-                ForEach(lanes) { lane in laneRow(lane, now: now) }
-            } else {
-                Text(host.runnerNames.isEmpty ? "No runner containers observed" : "Lane detail not reported yet")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if let eligible = host.eligibleQueued, let queued = viewModel.localSnapshot?.queue?.queued, queued > 0, !unreachable {
-                Text(eligible == 0 ? "Can take none of the \(queued) queued jobs" : "Can take \(eligible) of \(queued) queued jobs")
-                    .font(.caption).foregroundStyle(eligible == 0 ? Color.orange : Color.secondary)
-            }
-            if let pools = host.pools, !pools.isEmpty {
-                Text("Serves: " + pools.joined(separator: ", ")).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
-            }
+            ForEach(0..<max(0, laneSlots - max(lanes.count, 1)), id: \.self) { _ in laneRowPlaceholder }
+            Group {
+                if let eligible = host.eligibleQueued, let queued = viewModel.localSnapshot?.queue?.queued, queued > 0, !unreachable {
+                    Text(eligible == 0 ? "Can take none of the \(queued) queued jobs" : "Can take \(eligible) of \(queued) queued jobs")
+                        .foregroundStyle(eligible == 0 ? Color.orange : Color.secondary)
+                } else {
+                    Text(" ")
+                }
+            }.font(.caption).lineLimit(1)
+            Text("Serves: " + ((host.pools ?? []).isEmpty ? "—" : (host.pools ?? []).joined(separator: ", ")))
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).help((host.pools ?? []).joined(separator: ", "))
+            Spacer(minLength: 0)
             Text("Each: \(host.cpuPerLane) CPUs · \(host.memoryGiBPerLane) GiB limit")
-                .font(.caption2).foregroundStyle(.tertiary)
-        }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+        }.padding(12).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(host.isDegraded && !stale ? Color.red.opacity(0.5) : Color.primary.opacity(0.08)))
+    }
+
+    /// Same height as a lane row, invisible: keeps cards with fewer lanes from shrinking.
+    private var laneRowPlaceholder: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Circle().frame(width: 7, height: 7)
+            Text("Slot 0").font(.caption)
+        }.hidden().accessibilityHidden(true)
     }
 
     private func laneRow(_ lane: CILane, now: Date) -> some View {
@@ -228,7 +248,7 @@ struct CIDashboardView: View {
                     Text("\(max(0, Int(now.timeIntervalSince1970 - start) / 60))m").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
                 }
             } else {
-                Text(status.0).font(.caption).foregroundStyle(status.1 == .secondary ? Color.secondary : status.1)
+                Text(status.0).font(.caption).foregroundStyle(status.1 == .secondary ? Color.secondary : status.1).lineLimit(1)
                 Spacer(minLength: 4)
             }
             if let memory = lane.memory, !memory.isEmpty {
