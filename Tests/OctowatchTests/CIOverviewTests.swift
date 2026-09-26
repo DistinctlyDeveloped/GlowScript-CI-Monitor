@@ -41,4 +41,48 @@ struct CIOverviewTests {
         #expect(!snapshot.isStale(at: Date(timeIntervalSince1970: 1120)))
         #expect(snapshot.isStale(at: Date(timeIntervalSince1970: 1121)))
     }
+
+    func snapshot(_ json: String) throws -> CIHostSnapshot {
+        try JSONDecoder().decode(CIHostSnapshot.self, from: Data(json.utf8))
+    }
+
+    @Test func preLaneSnapshotsStillDecode() throws {
+        let old = try snapshot("""
+        {"generatedAt": 1, "hosts": [{"id": "macbook", "name": "MacBook", "state": "Online", "expectedLanes": 3,
+          "cpuPerLane": 4, "memoryGiBPerLane": 8, "observedAt": 1, "runnerNames": ["a", "b"], "memoryUsage": []}]}
+        """)
+        #expect(old.queue == nil && old.activeAlerts.isEmpty)
+        #expect(old.hosts[0].onlineLanes == 2)
+        #expect(!old.hosts[0].isDegraded)
+    }
+
+    @Test func containerUpButGitHubOfflineIsDegradedNotOnline() throws {
+        let s = try snapshot("""
+        {"generatedAt": 1, "hosts": [{"id": "macbook", "name": "MacBook", "state": "Online", "expectedLanes": 3,
+          "cpuPerLane": 4, "memoryGiBPerLane": 8, "observedAt": 1, "runnerNames": ["glowscript-macbook-0-a"], "memoryUsage": [],
+          "proxy": {"state": "running", "restarts": 718, "looping": true},
+          "lanes": [{"name": "glowscript-macbook-0-a", "container": true, "github": "offline", "busy": false, "memory": null, "job": null}]}],
+         "queue": {"queued": 85, "hosted": 3, "running": 5, "oldestWaitSec": 8356, "medianWaitSec": 3343, "idleRunners": 1,
+          "idleEligible": 0, "unservable": 0, "unservableLabels": [], "oldest": []},
+         "alerts": [{"key": "proxy:macbook", "message": "MacBook: CI proxy is in a restart loop", "since": 1}]}
+        """)
+        let host = s.hosts[0]
+        #expect(host.onlineLanes == 0)
+        #expect(host.isDegraded)
+        #expect(host.lanes?.first?.isMismatched == true)
+        #expect(host.lanes?.first?.shortName == "Slot 0")
+        #expect(s.queue?.queued == 85)
+        #expect(s.activeAlerts.map(\.key) == ["proxy:macbook"])
+    }
+
+    @Test func healthyProxyWithOnlineLanesIsNotDegraded() throws {
+        let s = try snapshot("""
+        {"generatedAt": 1, "hosts": [{"id": "studio", "name": "Studio", "state": "Online", "expectedLanes": 2,
+          "cpuPerLane": 4, "memoryGiBPerLane": 8, "observedAt": 1, "runnerNames": [], "memoryUsage": [],
+          "proxy": {"state": "running", "restarts": 0, "looping": false},
+          "lanes": [{"name": "glowscript-studio-abcdef123", "container": false, "github": "unregistered", "busy": false, "memory": null, "job": null}]}]}
+        """)
+        // A just-finished JIT runner with no container is not a host fault.
+        #expect(!s.hosts[0].isDegraded)
+    }
 }

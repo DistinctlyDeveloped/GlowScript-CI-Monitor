@@ -3,9 +3,11 @@ import SwiftUI
 struct MenuBarLabel: View {
     let repoStatuses: [RepoStatusItem]
     let pulsePhase: Bool
+    /// A local CI host or lane needs attention (collector alert). Shown even when every repo is green.
+    var ciAlert: Bool = false
 
     var body: some View {
-        if repoStatuses.isEmpty {
+        if repoStatuses.isEmpty && !ciAlert {
             Image(systemName: "circle.dashed")
                 .symbolRenderingMode(.hierarchical)
         } else {
@@ -27,6 +29,12 @@ struct MenuBarLabel: View {
                         .foregroundStyle(.white)
                 }
                 .opacity(item.status == .inProgress ? (pulsePhase ? 1.0 : 0.4) : 1.0)
+            }
+            if ciAlert {
+                ZStack {
+                    Circle().fill(Color.red).frame(width: 16, height: 16)
+                    Text("!").font(.system(size: 11, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+                }
             }
         }
 

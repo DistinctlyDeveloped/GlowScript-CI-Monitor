@@ -10,7 +10,8 @@ struct GitHubActionsBarApp: App {
                 .frame(width: min(920, (NSScreen.main?.visibleFrame.width ?? 1000) - 40),
                        height: min(720, (NSScreen.main?.visibleFrame.height ?? 800) - 60))
         } label: {
-            MenuBarLabel(repoStatuses: viewModel.repoStatuses, pulsePhase: viewModel.pulsePhase)
+            MenuBarLabel(repoStatuses: viewModel.repoStatuses, pulsePhase: viewModel.pulsePhase,
+                         ciAlert: !(viewModel.localSnapshot?.activeAlerts.isEmpty ?? true))
         }
         .menuBarExtraStyle(.window)
     }
