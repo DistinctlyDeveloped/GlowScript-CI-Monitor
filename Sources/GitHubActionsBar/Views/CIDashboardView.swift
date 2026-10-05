@@ -84,7 +84,7 @@ struct CIDashboardView: View {
             if let snapshot = viewModel.localSnapshot {
                 let stale = snapshot.isStale(at: now) || viewModel.localStatusError != nil
                 if !stale && !snapshot.activeAlerts.isEmpty { alertBanner(snapshot.activeAlerts, now: now) }
-                // Every card reserves the same rows (the largest lane count across hosts) and the three
+                // Every card reserves the same rows (the largest lane count across hosts) and all
                 // share one height and width, so the row never reflows as runners come and go.
                 let slots = snapshot.hosts.map { max($0.expectedLanes, $0.lanes?.count ?? 0) }.max() ?? 0
                 HStack(alignment: .top, spacing: 10) {
@@ -182,7 +182,7 @@ struct CIDashboardView: View {
         let alarming = stale || host.isDegraded || ["Unreachable", "Stopped", "Docker unavailable"].contains(host.state)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Image(systemName: host.id == "macbook" ? "laptopcomputer" : "desktopcomputer")
+                Image(systemName: host.id == "macbook" ? "laptopcomputer" : (host.id == "hostinger" ? "server.rack" : "desktopcomputer"))
                 Text(host.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text(label).font(.caption.weight(.medium))

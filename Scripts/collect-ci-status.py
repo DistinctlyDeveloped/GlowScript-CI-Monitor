@@ -37,8 +37,10 @@ GENERIC_LABELS = {'self-hosted', 'Linux', 'X64', 'ARM64', 'macOS', 'Windows'}
 
 HOSTS = [
     {'id': 'studio', 'name': 'Studio', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
-    {'id': 'simrig', 'name': 'SimRig', 'expectedLanes': 1, 'cpuPerLane': 4, 'memoryGiBPerLane': 16},
+    {'id': 'simrig', 'name': 'SimRig', 'expectedLanes': 2, 'cpuPerLane': 6, 'memoryGiBPerLane': 24},
     {'id': 'macbook', 'name': 'MacBook', 'expectedLanes': 3, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
+    # Dedicated Hostinger VPS (GlowScript #2093): two slots under the glowscript-hostinger systemd unit.
+    {'id': 'hostinger', 'name': 'Hostinger', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 12},
 ]
 
 # Executed only by this collector on fixed, authorized hosts. Never provided by API data.
@@ -49,9 +51,9 @@ state = pathlib.Path.home() / 'glowscript-ci'
 def command(args, timeout=8):
     r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     return r.returncode, r.stdout
-if host == 'simrig':
+if host in ('simrig', 'hostinger'):
     docker = ['/usr/bin/docker']
-    service = command(['systemctl', 'is-active', 'glowscript-simrig'])[1].strip() == 'active'
+    service = command(['systemctl', 'is-active', 'glowscript-' + host])[1].strip() == 'active'
 else:
     docker = [str(state / 'docker')] if host == 'macbook' else ['/Applications/Docker.app/Contents/Resources/bin/docker']
     label = 'com.glowscript.macbook-ci' if host == 'macbook' else 'com.glowscript.ci-supervisor'
@@ -109,6 +111,10 @@ def collect(host):
             python = "import base64,sys,zlib;sys.argv=['probe',%r];exec(zlib.decompress(base64.b64decode(%r)))" % (host['id'], payload)
             if host['id'] == 'studio':
                 remote = '/usr/bin/env DEVELOPER_DIR=/Library/Developer/CommandLineTools /usr/bin/python3 -c ' + shlex.quote(python)
+            elif host['id'] == 'hostinger':
+                # The supervisor and its state run as root on the VPS (/root/glowscript-ci).
+                target = 'root@82.180.163.60'
+                remote = '/usr/bin/python3 -c ' + shlex.quote(python)
             else:
                 # Listing running distros does not start one. Never wake a stopped CI VM just to monitor it.
                 stopped = json.dumps({'service': False, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': []})

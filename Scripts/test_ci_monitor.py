@@ -110,4 +110,32 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(cached['fetchedAt'], 1000)
             self.assertIn('GitHub unavailable', error)
 
+class HostingerLaneTests(unittest.TestCase):
+    def test_hosts_match_the_fleet_slot_layout(self):
+        layout = {h['id']: (h['expectedLanes'], h['cpuPerLane'], h['memoryGiBPerLane']) for h in collector.HOSTS}
+        self.assertEqual(layout['hostinger'], (2, 4, 12))
+        self.assertEqual(layout['simrig'], (2, 6, 24))
+
+    def test_hostinger_probe_runs_as_root_over_pinned_ssh_and_reads_its_systemd_unit(self):
+        from unittest.mock import patch
+        import json
+        probe = {'service': True, 'docker': True, 'paused': False, 'onAC': True,
+                 'runnerNames': ['glowscript-hostinger-1-abcdef123456'], 'memoryUsage': ['1GiB'], 'memoryByName': {}, 'proxy': None}
+        hostinger = next(h for h in collector.HOSTS if h['id'] == 'hostinger')
+        with patch.object(collector.subprocess, 'check_output', return_value=json.dumps(probe).encode()) as run:
+            result = collector.collect(hostinger)
+        args = run.call_args.args[0]
+        self.assertEqual(args[0], '/usr/bin/ssh')
+        self.assertIn('StrictHostKeyChecking=yes', args)
+        self.assertIn('BatchMode=yes', args)
+        self.assertEqual(args[-2], 'root@82.180.163.60')
+        self.assertTrue(args[-1].startswith('/usr/bin/python3 -c '))
+        self.assertNotIn('powershell', args[-1])
+        self.assertEqual(result['state'], 'Online')
+        self.assertIn("'glowscript-' + host", collector.PROBE)
+        self.assertIn("host in ('simrig', 'hostinger')", collector.PROBE)
+
+    def test_hostinger_runners_are_attributed_to_their_host(self):
+        self.assertEqual(collector.host_of('glowscript-hostinger-0-abcdef123456'), 'hostinger')
+
 if __name__ == '__main__': unittest.main()

@@ -62,7 +62,7 @@ struct CILane: Codable, Sendable, Identifiable {
     var isMismatched: Bool { github != "online" && github != "unknown" }
     var shortName: String {
         let parts = name.split(separator: "-")
-        if name.hasPrefix("glowscript-macbook-"), parts.count > 2 { return "Slot \(parts[2])" }
+        if name.hasPrefix("glowscript-macbook-") || name.hasPrefix("glowscript-hostinger-"), parts.count > 2 { return "Slot \(parts[2])" }
         return String(parts.last?.prefix(6) ?? "")
     }
 }
@@ -120,7 +120,10 @@ struct CIJob: Decodable, Sendable, Identifiable {
         if runner.hasPrefix("glowscript-macbook-") { return "MacBook" }
         if runner.hasPrefix("glowscript-simrig-") { return "SimRig" }
         if runner.hasPrefix("glowscript-studio-") { return "Studio" }
+        if runner.hasPrefix("glowscript-hostinger-") { return "Hostinger" }
         if labels?.contains("glowscript-simrig") == true { return "SimRig" }
+        if labels?.contains("glowscript-hostinger") == true { return "Hostinger" }
+        if labels?.contains("glowscript-hostinger-canary") == true { return "Hostinger canary" }
         if labels?.contains("glowscript-studio") == true { return "ARM64 pool" }
         if labels?.contains("self-hosted") == true { return "Self-hosted" }
         if !runner.isEmpty || labels?.contains(where: { $0.hasPrefix("ubuntu-") || $0.hasPrefix("macos-") || $0.hasPrefix("windows-") }) == true { return "GitHub-hosted" }

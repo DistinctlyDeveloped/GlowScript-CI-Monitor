@@ -22,6 +22,24 @@ struct CIOverviewTests {
         #expect(try decode("glowscript-macbook-0-abc123", labels: ["glowscript-studio"]).location == "MacBook")
         #expect(try decode("glowscript-studio-abc123", labels: ["glowscript-studio"]).location == "Studio")
         #expect(try decode("glowscript-simrig-abc123", labels: ["glowscript-simrig"]).location == "SimRig")
+        #expect(try decode("glowscript-hostinger-1-abc123", labels: ["glowscript-pool"]).location == "Hostinger")
+    }
+
+    @Test func queuedHostingerJobsNameTheirLane() throws {
+        #expect(try decode(nil, labels: ["self-hosted", "glowscript-hostinger"]).location == "Hostinger")
+        #expect(try decode(nil, labels: ["self-hosted", "glowscript-hostinger-canary"]).location == "Hostinger canary")
+    }
+
+    @Test func hostingerLanesShowTheirSlot() throws {
+        let s = try snapshot("""
+        {"generatedAt": 1, "hosts": [{"id": "hostinger", "name": "Hostinger", "state": "Online", "expectedLanes": 2,
+          "cpuPerLane": 4, "memoryGiBPerLane": 12, "observedAt": 1, "runnerNames": ["glowscript-hostinger-1-abcdef123456"],
+          "memoryUsage": [], "proxy": {"state": "running", "restarts": 0},
+          "lanes": [{"name": "glowscript-hostinger-1-abcdef123456", "container": true, "github": "online", "busy": true,
+                     "memory": null, "job": null}]}],
+         "queue": null, "alerts": []}
+        """)
+        #expect(s.hosts[0].lanes?.first?.shortName == "Slot 1")
     }
 
     @Test func unassignedAndHostedRemainDistinct() throws {
