@@ -9,7 +9,9 @@ only the resulting JSON.
 "Online" is GitHub's view of a runner, not whether its container exists: a
 container can be Up for hours while GitHub has the runner offline (e.g. the
 proxy it egresses through is in a restart loop). Both are recorded per lane so a
-mismatch is visible.
+mismatch is visible, with a `phase` that separates a lane registering or tearing
+down (younger than TRANSITION_GRACE) from one that is genuinely degraded. The
+first-seen time lives in monitor-state.json, so the age is real across runs.
 """
 import base64
 import calendar
@@ -29,6 +31,10 @@ REPO = 'DistinctlyDeveloped/GlowScript'
 GH = '/opt/homebrew/bin/gh'
 GITHUB_INTERVAL = 55          # seconds between GitHub refreshes (collector runs every 30s)
 OFFLINE_ALERT_AFTER = 600     # container up / registered but GitHub offline this long -> alert
+# Every job runs in a fresh ephemeral container that registers on start and deregisters on exit, so
+# a container/GitHub disagreement younger than this is a lane starting or stopping, not a fault. The
+# GitHub view is itself cached up to GITHUB_INTERVAL and polled every 30s, so the window must exceed both.
+TRANSITION_GRACE = 120
 UNREACHABLE_ALERT_AFTER = 600
 IDLE_WHILE_QUEUED_AFTER = 300
 UNSERVABLE_AFTER = 600
@@ -200,6 +206,21 @@ def is_hosted(labels):
     return 'self-hosted' not in labels
 
 
+def lane_phase(container, mismatch_age):
+    """How to read a lane whose container and GitHub registration disagree.
+
+    'starting': container up, GitHub has not registered it yet (or not online yet).
+    'stopping': container gone, GitHub still lists the runner (and maybe its job).
+    After TRANSITION_GRACE it is no longer a handover:
+    'degraded': container up but GitHub still cannot hand it work -- a host fault.
+    'orphaned': no container, GitHub keeps a stale offline registration. Not a host fault; GitHub
+                expires these on its own schedule, which can take hours.
+    The age must come from a first-seen time persisted across collector runs; one poll proves nothing.
+    """
+    if mismatch_age < TRANSITION_GRACE: return 'starting' if container else 'stopping'
+    return 'degraded' if container else 'orphaned'
+
+
 def analyze(hosts, github, state, now):
     """Adds lanes/pools per host, a queue summary and alerts. Mutates `state` (persisted between runs)."""
     runners = {r['name']: r for r in (github or {}).get('runners', [])}
@@ -222,13 +243,17 @@ def analyze(hosts, github, state, now):
             runner = runners.get(name)
             github_state = 'unknown' if github is None else ('unregistered' if runner is None else runner['status'])
             job = running.get(name)
-            lanes.append({'name': name, 'container': name in containers, 'github': github_state,
-                          'busy': bool(runner and runner['busy']), 'memory': memory.get(name),
-                          'job': None if not job else {k: job[k] for k in ('name', 'branch', 'pr', 'startedAt', 'url', 'workflow')}})
+            lane = {'name': name, 'container': name in containers, 'github': github_state,
+                    'busy': bool(runner and runner['busy']), 'memory': memory.get(name),
+                    'job': None if not job else {k: job[k] for k in ('name', 'branch', 'pr', 'startedAt', 'url', 'workflow')},
+                    'phase': None, 'mismatchSince': None}
+            lanes.append(lane)
             mismatch = github is not None and github_state != 'online'
             if mismatch:
                 key = 'lane:%s' % name
                 since = seen_since.setdefault(key, now)
+                lane['mismatchSince'] = since
+                lane['phase'] = lane_phase(name in containers, now - since)
                 if now - since >= OFFLINE_ALERT_AFTER:
                     where = 'container up but ' if name in containers else ''
                     alert(key, '%s: %s%s is %s on GitHub for %dm' % (host['name'], where, name, github_state, (now - since) // 60), since)

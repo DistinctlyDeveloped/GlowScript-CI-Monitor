@@ -93,6 +93,46 @@ struct CIOverviewTests {
         #expect(s.activeAlerts.map(\.key) == ["proxy:macbook"])
     }
 
+    func hostWithLane(_ lane: String) throws -> CIHost {
+        try snapshot("""
+        {"generatedAt": 1, "hosts": [{"id": "studio", "name": "Studio", "state": "Online", "expectedLanes": 2,
+          "cpuPerLane": 4, "memoryGiBPerLane": 8, "observedAt": 1, "runnerNames": [], "memoryUsage": [],
+          "proxy": {"state": "running", "restarts": 0, "looping": false}, "lanes": [\(lane)]}]}
+        """).hosts[0]
+    }
+
+    @Test func youngMismatchIsTransitionalGreyNotDegraded() throws {
+        let starting = try hostWithLane("""
+        {"name": "glowscript-studio-new", "container": true, "github": "unregistered", "busy": false, "memory": null, "job": null,
+         "phase": "starting", "mismatchSince": 0}
+        """)
+        #expect(starting.lanes?.first?.isTransitional == true)
+        #expect(starting.lanes?.first?.isFaulted == false)
+        #expect(!starting.isDegraded)
+        let stopping = try hostWithLane("""
+        {"name": "glowscript-studio-old", "container": false, "github": "offline", "busy": true, "memory": null,
+         "job": {"name": "Lint gates", "branch": "b", "pr": 1, "startedAt": 0, "url": null, "workflow": "Tests"},
+         "phase": "stopping", "mismatchSince": 0}
+        """)
+        #expect(stopping.lanes?.first?.isTransitional == true)
+        #expect(!stopping.isDegraded)
+    }
+
+    @Test func agedMismatchDegradesOnlyWhenTheContainerIsUp() throws {
+        let containerUp = try hostWithLane("""
+        {"name": "glowscript-studio-a", "container": true, "github": "offline", "busy": false, "memory": null, "job": null,
+         "phase": "degraded", "mismatchSince": 0}
+        """)
+        #expect(containerUp.isDegraded)
+        #expect(containerUp.lanes?.first?.isTransitional == false)
+        let orphaned = try hostWithLane("""
+        {"name": "glowscript-studio-b", "container": false, "github": "offline", "busy": false, "memory": null, "job": null,
+         "phase": "orphaned", "mismatchSince": 0}
+        """)
+        #expect(!orphaned.isDegraded)
+        #expect(orphaned.lanes?.first?.isTransitional == false)
+    }
+
     @Test func healthyProxyWithOnlineLanesIsNotDegraded() throws {
         let s = try snapshot("""
         {"generatedAt": 1, "hosts": [{"id": "studio", "name": "Studio", "state": "Online", "expectedLanes": 2,

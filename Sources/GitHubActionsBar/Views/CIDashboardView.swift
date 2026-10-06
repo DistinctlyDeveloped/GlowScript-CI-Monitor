@@ -233,8 +233,9 @@ struct CIDashboardView: View {
 
     private func laneRow(_ lane: CILane, now: Date) -> some View {
         let status: (String, Color) = {
+            if lane.isTransitional { return ("\(lane.phase ?? "") · GitHub \(lane.github)", .gray) }
             if lane.isMismatched && lane.container { return ("container up · GitHub \(lane.github)", .red) }
-            if lane.isMismatched { return ("GitHub \(lane.github)", .orange) }
+            if lane.isMismatched { return ("GitHub \(lane.github)", lane.isFaulted ? .red : .orange) }
             if lane.github == "unknown" { return ("GitHub status unknown", .secondary) }
             return (lane.busy ? "busy" : "idle", lane.busy ? .green : .secondary)
         }()
