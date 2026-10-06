@@ -57,9 +57,17 @@ struct CILane: Codable, Sendable, Identifiable {
     let busy: Bool
     let memory: String?
     let job: CILaneJob?
+    /// Collector's age-aware reading of a mismatch: "starting", "stopping", "degraded" or "orphaned". Nil when the lane
+    /// agrees with GitHub, or from a collector that predates the field.
+    var phase: String? = nil
+    var mismatchSince: Double? = nil
     var id: String { name }
     /// Container up but GitHub cannot hand it work (or the reverse) -- the failure a container-only check hides.
     var isMismatched: Bool { github != "online" && github != "unknown" }
+    /// A fresh container registering, or a finished one deregistering: expected for ephemeral runners.
+    var isTransitional: Bool { phase == "starting" || phase == "stopping" }
+    /// A mismatch that has outlived the collector's grace window. Pre-phase snapshots fall back to the old rule.
+    var isFaulted: Bool { phase.map { $0 == "degraded" } ?? (isMismatched && container) }
     var shortName: String {
         let parts = name.split(separator: "-")
         if name.hasPrefix("glowscript-macbook-") || name.hasPrefix("glowscript-hostinger-"), parts.count > 2 { return "Slot \(parts[2])" }
@@ -92,7 +100,7 @@ struct CIHost: Codable, Sendable, Identifiable {
 
     /// Lanes GitHub reports online. Falls back to container count for pre-lane snapshots.
     var onlineLanes: Int { lanes.map { $0.filter { $0.github == "online" }.count } ?? runnerNames.count }
-    var isDegraded: Bool { (proxy.map { !$0.isHealthy } ?? false) || (lanes ?? []).contains { $0.isMismatched && $0.container } }
+    var isDegraded: Bool { (proxy.map { !$0.isHealthy } ?? false) || (lanes ?? []).contains { $0.isFaulted } }
     /// How many of the currently queued self-hosted jobs this host's online runners could take.
     var eligibleQueued: Int? = nil
 }

@@ -51,6 +51,58 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual([a['key'] for a in alerts], ['lane:glowscript-macbook-0-a'])
         self.assertIn('container up but', alerts[0]['message'])
 
+    def test_fresh_container_awaiting_registration_is_starting_not_degraded(self):
+        state = {}
+        hosts = [host('studio', ['glowscript-studio-new'])]
+        collector.analyze(hosts, {'runners': [], 'jobs': []}, state, now=1000)
+        lane = hosts[0]['lanes'][0]
+        self.assertEqual((lane['container'], lane['github'], lane['phase'], lane['mismatchSince']), (True, 'unregistered', 'starting', 1000))
+
+    def test_torn_down_container_still_listed_by_github_is_stopping(self):
+        github = {'runners': [runner('glowscript-simrig-old', busy=True)],
+                  'jobs': [job(status='in_progress', runner_name='glowscript-simrig-old')]}
+        hosts = [host('simrig', [])]
+        collector.analyze(hosts, github, {}, now=1000)
+        lane = hosts[0]['lanes'][0]
+        self.assertFalse(lane['container'])
+        self.assertEqual(lane['job']['name'], 'Lint gates')
+        self.assertIsNone(lane['phase'])  # GitHub says online: no disagreement to age yet
+        github['runners'][0]['status'] = 'offline'
+        hosts = [host('simrig', [])]
+        collector.analyze(hosts, github, {}, now=1000)
+        self.assertEqual(hosts[0]['lanes'][0]['phase'], 'stopping')
+
+    def test_mismatch_ages_across_persisted_runs_and_only_then_degrades(self):
+        import json
+        github = {'runners': [runner('glowscript-macbook-0-a', status='offline')], 'jobs': []}
+        state = {}
+        phases = []
+        for now in (0, 30, 119, 120, 500):
+            state = json.loads(json.dumps(state))  # monitor-state.json round trip between collector runs
+            hosts = [host('macbook', ['glowscript-macbook-0-a'])]
+            collector.analyze(hosts, github, state, now=now)
+            phases.append((hosts[0]['lanes'][0]['phase'], hosts[0]['lanes'][0]['mismatchSince']))
+        self.assertEqual(phases, [('starting', 0), ('starting', 0), ('starting', 0), ('degraded', 0), ('degraded', 0)])
+
+    def test_age_comes_from_state_not_the_current_poll(self):
+        github = {'runners': [runner('glowscript-macbook-0-a', status='offline')], 'jobs': []}
+        hosts = [host('macbook', ['glowscript-macbook-0-a'])]
+        collector.analyze(hosts, github, {}, now=10_000)
+        self.assertEqual(hosts[0]['lanes'][0]['phase'], 'starting')
+        self.assertEqual(collector.lane_phase(True, collector.TRANSITION_GRACE - 1), 'starting')
+        self.assertEqual(collector.lane_phase(False, collector.TRANSITION_GRACE - 1), 'stopping')
+        self.assertEqual(collector.lane_phase(True, collector.TRANSITION_GRACE), 'degraded')
+        self.assertEqual(collector.lane_phase(False, collector.TRANSITION_GRACE), 'orphaned')
+        self.assertGreater(collector.TRANSITION_GRACE, collector.GITHUB_INTERVAL + 30)
+
+    def test_online_lane_and_unknown_github_have_no_phase(self):
+        hosts = [host('studio', ['glowscript-studio-a'])]
+        collector.analyze(hosts, {'runners': [runner('glowscript-studio-a')], 'jobs': []}, {}, now=0)
+        self.assertEqual((hosts[0]['lanes'][0]['phase'], hosts[0]['lanes'][0]['mismatchSince']), (None, None))
+        hosts = [host('studio', ['glowscript-studio-a'])]
+        collector.analyze(hosts, None, {}, now=0)
+        self.assertEqual((hosts[0]['lanes'][0]['github'], hosts[0]['lanes'][0]['phase']), ('unknown', None))
+
     def test_recovered_lane_clears_its_timer(self):
         state = {}
         collector.analyze([host('macbook', ['glowscript-macbook-0-a'])], {'runners': [runner('glowscript-macbook-0-a', status='offline')], 'jobs': []}, state, now=0)
@@ -134,6 +186,18 @@ class HostingerLaneTests(unittest.TestCase):
         self.assertEqual(result['state'], 'Online')
         self.assertIn("'glowscript-' + host", collector.PROBE)
         self.assertIn("host in ('simrig', 'hostinger')", collector.PROBE)
+
+    def test_simrig_probe_stays_under_the_cmd_exe_command_line_cap(self):
+        from unittest.mock import patch
+        import base64, json
+        probe = {'service': True, 'docker': True, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': []}
+        simrig = next(h for h in collector.HOSTS if h['id'] == 'simrig')
+        with patch.object(collector.subprocess, 'check_output', return_value=json.dumps(probe).encode()) as run:
+            collector.collect(simrig)
+        remote = run.call_args.args[0][-1]
+        self.assertTrue(remote.startswith('powershell.exe -NoProfile -EncodedCommand '))
+        self.assertLess(len(remote), 8191)
+        self.assertIn('zlib.decompress', base64.b64decode(remote.split(' ')[-1]).decode('utf-16le'))
 
     def test_hostinger_runners_are_attributed_to_their_host(self):
         self.assertEqual(collector.host_of('glowscript-hostinger-0-abcdef123456'), 'hostinger')
