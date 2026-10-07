@@ -27,6 +27,35 @@ class MonitorTests(unittest.TestCase):
     def test_empty_running_service_is_ready(self):
         self.assertEqual(collector.classify(self.probe()), 'Ready')
 
+    def test_macbook_low_disk_pause_is_named(self):
+        # GlowScript #2323: the supervisor closed admission below 30 GB free.
+        low = {'state': 'low', 'free_bytes': 12_340_000_000, 'resume_bytes': 35 * 10**9}
+        self.assertEqual(collector.classify(self.probe(disk=low)), 'Paused: low disk')
+        self.assertEqual(collector.classify(self.probe(disk=low, runnerNames=['job'])), 'Draining: low disk')
+        self.assertEqual(collector.classify(self.probe(disk={'state': 'unknown'})), 'Paused: disk unreadable')
+        self.assertEqual(collector.classify(self.probe(disk=low, paused=True)), 'Paused: low disk')
+        self.assertEqual(collector.classify(self.probe(disk=None)), 'Ready')
+
+    def test_probe_reads_only_a_fresh_pause_from_disk_state(self):
+        import json, pathlib, tempfile, time
+        from unittest.mock import patch
+        # The probe up to its own call of disk_pause(): imports, `state`, `command`, `disk_pause`.
+        head = collector.PROBE.split('disk = disk_pause()')[0]
+        with tempfile.TemporaryDirectory() as tmp, patch.object(pathlib.Path, 'home', return_value=pathlib.Path(tmp)):
+            scope = {}
+            exec(head, scope)
+            (pathlib.Path(tmp) / 'glowscript-ci').mkdir()
+            write = lambda **v: (pathlib.Path(tmp) / 'glowscript-ci' / 'disk-state.json').write_text(json.dumps(v))
+            self.assertIsNone(scope['disk_pause']())
+            write(state='low', checked=time.time(), free_bytes=1, resume_bytes=2, label='MacBook paused: low disk')
+            self.assertEqual(scope['disk_pause']()['label'], 'MacBook paused: low disk')
+            write(state='low', checked=time.time() - collector.DISK_STATE_FRESH - 5, free_bytes=1)
+            self.assertIsNone(scope['disk_pause']())
+            write(state='ok', checked=time.time(), free_bytes=50 * 10**9)
+            self.assertIsNone(scope['disk_pause']())
+            (pathlib.Path(tmp) / 'glowscript-ci' / 'disk-state.json').write_text('{')
+            self.assertIsNone(scope['disk_pause']())
+
 def host(hid, containers=(), state='Online', proxy=None):
     base = next(h for h in collector.HOSTS if h['id'] == hid)
     return dict(base, state=state, runnerNames=list(containers), memoryByName={}, proxy=proxy)
@@ -39,6 +68,19 @@ def job(labels=('self-hosted', 'Linux', 'ARM64', 'glowscript-studio'), status='q
             'startedAt': None, 'url': None, 'branch': 'b', 'pr': 1, 'workflow': 'Tests'}
 
 class AnalysisTests(unittest.TestCase):
+    def test_low_disk_alerts_at_once_with_the_label(self):
+        hosts = [host('macbook', state='Paused: low disk')]
+        hosts[0]['disk'] = {'state': 'low', 'free_bytes': 12_340_000_000, 'resume_bytes': 35 * 10**9,
+                            'label': 'MacBook paused: low disk'}
+        state = {}
+        _, alerts = collector.analyze(hosts, {'runners': [], 'jobs': []}, state, now=1000)
+        self.assertEqual([(a['key'], a['message']) for a in alerts],
+                         [('disk:macbook', 'MacBook paused: low disk (12.3 GB free; admission reopens at 35 GB)')])
+        recovered = [host('macbook', state='Ready')]
+        _, alerts = collector.analyze(recovered, {'runners': [], 'jobs': []}, state, now=1100)
+        self.assertEqual(alerts, [])
+        self.assertNotIn('disk:macbook', state['mismatchSince'])
+
     def test_container_up_but_github_offline_alerts_only_after_ten_minutes(self):
         hosts = [host('macbook', ['glowscript-macbook-0-a'], proxy={'state': 'running', 'restarts': 0})]
         github = {'runners': [runner('glowscript-macbook-0-a', status='offline')], 'jobs': []}
