@@ -43,15 +43,21 @@ MAX_OLDEST = 5
 # running. A non-running state older than this means the supervisor stopped writing, so it reads as unknown.
 VM_STATE_FRESH = 300
 VM_LABELS = {'stopped': 'VM down', 'starting': 'VM starting', 'broken': 'VM broken', 'held': 'VM held', 'unknown': 'VM unknown'}
+# The MacBook supervisor rewrites disk-state.json at least every 30s (GlowScript #2323); older means it stopped.
+DISK_STATE_FRESH = 300
 GENERIC_LABELS = {'self-hosted', 'Linux', 'X64', 'ARM64', 'macOS', 'Windows'}
 
 HOSTS = [
     {'id': 'studio', 'name': 'Studio', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
     {'id': 'simrig', 'name': 'SimRig', 'expectedLanes': 2, 'cpuPerLane': 6, 'memoryGiBPerLane': 24},
     {'id': 'macbook', 'name': 'MacBook', 'expectedLanes': 3, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
-    # Dedicated Hostinger VPS (GlowScript #2093): two slots under the glowscript-hostinger systemd unit.
-    {'id': 'hostinger', 'name': 'Hostinger', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 12},
+    # Dedicated Hostinger VPS (GlowScript #2093): slots 0-1 (4 CPUs / 12 GiB) plus slot 2, the
+    # 1-CPU / 2-GiB main-push aggregate lane (GlowScript #2347), under the glowscript-hostinger unit.
+    {'id': 'hostinger', 'name': 'Hostinger', 'expectedLanes': 3, 'cpuPerLane': 4, 'memoryGiBPerLane': 12},
 ]
+# GlowScript #2347: main's push-run required aggregates request this label. The dedicated runner
+# (Hostinger slot 2) carries it outside glowscript-pool; the light slots carry it as the fallback.
+MAIN_AGGREGATE = 'glowscript-main-aggregate'
 
 # Executed only by this collector on fixed, authorized hosts. Never provided by API data.
 PROBE = r'''
@@ -80,6 +86,17 @@ def vm_state():
         return {'state': 'unknown', 'reason': 'stale'}
     return {k: value[k] for k in ('state', 'since', 'checked', 'attempts', 'retry_at', 'action', 'markers') if k in value}
 vm = vm_state() if host == 'macbook' else None
+def disk_pause():
+    # GlowScript #2323: the MacBook supervisor stops admitting below 30 GB free and says so here.
+    try:
+        import time
+        value = json.loads((state / 'disk-state.json').read_text())
+        if value.get('state') in ('low', 'unknown') and time.time() - value['checked'] <= __DISK_STATE_FRESH__:
+            return {k: value.get(k) for k in ('state', 'free_bytes', 'resume_bytes', 'label', 'checked')}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+disk = disk_pause() if host == 'macbook' else None
 if host in ('simrig', 'hostinger'):
     docker = ['/usr/bin/docker']
     service = command(['systemctl', 'is-active', 'glowscript-' + host])[1].strip() == 'active'
@@ -90,7 +107,7 @@ else:
     service = code == 0 and 'state = running' in status
 code, output = command(docker + ['ps', '--filter', 'label=com.glowscript.ci=disposable', '--format', '{{.Names}}'])
 if code != 0:
-    print(json.dumps({'service': service, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': [], 'memoryByName': {}, 'proxy': None, 'vm': vm}))
+    print(json.dumps({'service': service, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': [], 'memoryByName': {}, 'proxy': None, 'disk': disk, 'vm': vm}))
     sys.exit(0)
 prefix = 'glowscript-' + host + '-'
 names = [name for name in output.splitlines() if name.startswith(prefix)]
@@ -114,8 +131,9 @@ if host == 'macbook':
     on_ac = code == 0 and 'AC Power' in power
 paused = (state / 'PAUSED').exists() if host != 'studio' else False
 print(json.dumps({'service': service, 'docker': True, 'paused': paused, 'onAC': on_ac, 'runnerNames': names,
-                  'memoryUsage': [memory.get(n, '') for n in names], 'memoryByName': memory, 'proxy': proxy, 'vm': vm}))
-'''.replace('__VM_STATE_FRESH__', str(VM_STATE_FRESH))
+                  'memoryUsage': [memory.get(n, '') for n in names], 'memoryByName': memory, 'proxy': proxy,
+                  'disk': disk, 'vm': vm}))
+'''.replace('__DISK_STATE_FRESH__', str(DISK_STATE_FRESH)).replace('__VM_STATE_FRESH__', str(VM_STATE_FRESH))
 
 
 def classify(probe):
@@ -123,6 +141,10 @@ def classify(probe):
     vm = probe.get('vm')
     if vm and vm.get('state') != 'running': return VM_LABELS.get(vm.get('state'), VM_LABELS['unknown'])
     if not probe['docker']: return 'Docker unavailable'
+    # Low disk first: it needs action, while PAUSED is a deliberate operator choice.
+    if probe.get('disk'):
+        reason = 'low disk' if probe['disk'].get('state') == 'low' else 'disk unreadable'
+        return ('Draining: ' if probe['runnerNames'] else 'Paused: ') + reason
     if probe['paused']: return 'Draining' if probe['runnerNames'] else 'Paused'
     if not probe['onAC']: return 'Draining on battery' if probe['runnerNames'] else 'On battery'
     return 'Online' if probe['runnerNames'] else 'Ready'
@@ -157,7 +179,7 @@ def collect(host):
             data = subprocess.check_output(args, timeout=22, stderr=subprocess.DEVNULL)
         probe = json.loads(data)
         result.update(state=classify(probe), runnerNames=probe['runnerNames'], memoryUsage=probe['memoryUsage'],
-                      memoryByName=probe.get('memoryByName', {}), proxy=probe.get('proxy'), vm=probe.get('vm'))
+                      memoryByName=probe.get('memoryByName', {}), proxy=probe.get('proxy'), disk=probe.get('disk'), vm=probe.get('vm'))
     except (subprocess.SubprocessError, OSError, ValueError, KeyError):
         result['state'] = 'Unreachable'
     return result
@@ -306,6 +328,18 @@ def analyze(hosts, github, state, now):
                 alert(key, '%s: CI proxy is %s (%d restarts); its runners cannot reach GitHub'
                       % (host['name'], 'in a restart loop' if looping else proxy['state'], proxy['restarts']), since)
 
+        disk = host.get('disk')
+        if disk:
+            # No delay: admission is already closed, and a full Mac disk stops the VM (GlowScript #2323).
+            key = 'disk:%s' % host['id']
+            since = seen_since.setdefault(key, now)
+            if disk.get('state') == 'low' and isinstance(disk.get('free_bytes'), int):
+                detail = ' (%.1f GB free; admission reopens at %d GB)' % (
+                    disk['free_bytes'] / 1e9, (disk.get('resume_bytes') or 0) // 10**9)
+            else:
+                detail = ''
+            alert(key, '%s%s' % (disk.get('label') or '%s paused: low disk' % host['name'], detail), since)
+
         if host['state'] in ('Unreachable', 'Stopped', 'Docker unavailable') or host['state'] in VM_LABELS.values():
             key = 'host:%s' % host['id']
             since = seen_since.setdefault(key, now)
@@ -338,6 +372,21 @@ def analyze(hosts, github, state, now):
                  'unservableLabels': sorted({l for j in unservable for l in j['labels']} - GENERIC_LABELS),
                  'oldest': [{'name': j['name'], 'workflow': j['workflow'], 'branch': j['branch'], 'pr': j['pr'],
                              'waitSec': 0 if j['createdAt'] is None else int(now - j['createdAt']), 'url': j['url']} for j in oldest]}
+        carriers = [r for r in runners.values() if MAIN_AGGREGATE in r['labels']]
+        dedicated = [r for r in carriers if 'glowscript-pool' not in r['labels']]
+        queue['mainAggregate'] = {
+            'dedicated': [{'name': r['name'], 'status': r['status'], 'busy': r['busy']} for r in dedicated],
+            'fallbackOnline': sum(1 for r in carriers if r not in dedicated and r['status'] == 'online')}
+        if carriers and not any(r['status'] == 'online' for r in dedicated):
+            # The slot re-registers after every job; only a lasting gap means main's aggregates
+            # are back to queueing behind PR light jobs.
+            key = 'lane:main-aggregate'
+            since = seen_since.setdefault(key, now)
+            if now - since >= OFFLINE_ALERT_AFTER:
+                alert(key, 'Main-aggregate lane: no dedicated runner online for %dm; main\'s aggregates fall back to %d light runner(s)'
+                      % ((now - since) // 60, queue['mainAggregate']['fallbackOnline']), since)
+            else:
+                live_keys.add(key)
         for host in hosts:
             mine = [r for r in online if host_of(r['name']) == host['id']]
             host['eligibleQueued'] = sum(1 for j in self_hosted if any(can_run(r['labels'], j['labels']) for r in mine))
