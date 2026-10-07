@@ -179,7 +179,8 @@ struct CIDashboardView: View {
     private func hostCard(_ host: CIHost, stale: Bool, now: Date, laneSlots: Int) -> some View {
         let unreachable = stale || host.state == "Unreachable"
         let label = stale ? "Stale" : (host.isDegraded ? "Degraded" : host.state)
-        let alarming = stale || host.isDegraded || ["Unreachable", "Stopped", "Docker unavailable"].contains(host.state)
+        // "VM down", "VM held", "VM broken", "VM starting", "VM unknown": the MacBook supervisor's vm-state.json (GlowScript #2300).
+        let alarming = stale || host.isDegraded || ["Unreachable", "Stopped", "Docker unavailable"].contains(host.state) || host.state.hasPrefix("VM ")
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Image(systemName: host.id == "macbook" ? "laptopcomputer" : (host.id == "hostinger" ? "server.rack" : "desktopcomputer"))

@@ -39,6 +39,10 @@ UNREACHABLE_ALERT_AFTER = 600
 IDLE_WHILE_QUEUED_AFTER = 300
 UNSERVABLE_AFTER = 600
 MAX_OLDEST = 5
+# GlowScript #2300: the MacBook supervisor (#2299) rewrites vm-state.json every 15s while the VM is not
+# running. A non-running state older than this means the supervisor stopped writing, so it reads as unknown.
+VM_STATE_FRESH = 300
+VM_LABELS = {'stopped': 'VM down', 'starting': 'VM starting', 'broken': 'VM broken', 'held': 'VM held', 'unknown': 'VM unknown'}
 # The MacBook supervisor rewrites disk-state.json at least every 30s (GlowScript #2323); older means it stopped.
 DISK_STATE_FRESH = 300
 GENERIC_LABELS = {'self-hosted', 'Linux', 'X64', 'ARM64', 'macOS', 'Windows'}
@@ -63,6 +67,25 @@ state = pathlib.Path.home() / 'glowscript-ci'
 def command(args, timeout=8):
     r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     return r.returncode, r.stdout
+def vm_state():
+    # Fails closed: anything but a well-formed file is 'unknown', which never classifies as healthy.
+    import time
+    try:
+        value = json.loads((state / 'vm-state.json').read_text())
+    except FileNotFoundError:
+        return {'state': 'unknown', 'reason': 'missing'}
+    except (OSError, ValueError):
+        return {'state': 'unknown', 'reason': 'unreadable'}
+    if not isinstance(value, dict) or value.get('state') not in ('running', 'stopped', 'starting', 'broken', 'held', 'unknown'):
+        return {'state': 'unknown', 'reason': 'unrecognised'}
+    # While running, the supervisor rewrites the file only on Docker activity, so its age means nothing.
+    if value['state'] == 'running':
+        return {'state': 'running'}
+    checked = value.get('checked')
+    if not isinstance(checked, (int, float)) or isinstance(checked, bool) or time.time() - checked > __VM_STATE_FRESH__:
+        return {'state': 'unknown', 'reason': 'stale'}
+    return {k: value[k] for k in ('state', 'since', 'checked', 'attempts', 'retry_at', 'action', 'markers') if k in value}
+vm = vm_state() if host == 'macbook' else None
 def disk_pause():
     # GlowScript #2323: the MacBook supervisor stops admitting below 30 GB free and says so here.
     try:
@@ -84,7 +107,7 @@ else:
     service = code == 0 and 'state = running' in status
 code, output = command(docker + ['ps', '--filter', 'label=com.glowscript.ci=disposable', '--format', '{{.Names}}'])
 if code != 0:
-    print(json.dumps({'service': service, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': [], 'memoryByName': {}, 'proxy': None, 'disk': disk}))
+    print(json.dumps({'service': service, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': [], 'memoryByName': {}, 'proxy': None, 'disk': disk, 'vm': vm}))
     sys.exit(0)
 prefix = 'glowscript-' + host + '-'
 names = [name for name in output.splitlines() if name.startswith(prefix)]
@@ -109,12 +132,14 @@ if host == 'macbook':
 paused = (state / 'PAUSED').exists() if host != 'studio' else False
 print(json.dumps({'service': service, 'docker': True, 'paused': paused, 'onAC': on_ac, 'runnerNames': names,
                   'memoryUsage': [memory.get(n, '') for n in names], 'memoryByName': memory, 'proxy': proxy,
-                  'disk': disk}))
-'''.replace('__DISK_STATE_FRESH__', str(DISK_STATE_FRESH))
+                  'disk': disk, 'vm': vm}))
+'''.replace('__DISK_STATE_FRESH__', str(DISK_STATE_FRESH)).replace('__VM_STATE_FRESH__', str(VM_STATE_FRESH))
 
 
 def classify(probe):
     if not probe['service']: return 'Stopped'
+    vm = probe.get('vm')
+    if vm and vm.get('state') != 'running': return VM_LABELS.get(vm.get('state'), VM_LABELS['unknown'])
     if not probe['docker']: return 'Docker unavailable'
     # Low disk first: it needs action, while PAUSED is a deliberate operator choice.
     if probe.get('disk'):
@@ -154,7 +179,7 @@ def collect(host):
             data = subprocess.check_output(args, timeout=22, stderr=subprocess.DEVNULL)
         probe = json.loads(data)
         result.update(state=classify(probe), runnerNames=probe['runnerNames'], memoryUsage=probe['memoryUsage'],
-                      memoryByName=probe.get('memoryByName', {}), proxy=probe.get('proxy'), disk=probe.get('disk'))
+                      memoryByName=probe.get('memoryByName', {}), proxy=probe.get('proxy'), disk=probe.get('disk'), vm=probe.get('vm'))
     except (subprocess.SubprocessError, OSError, ValueError, KeyError):
         result['state'] = 'Unreachable'
     return result
@@ -260,6 +285,10 @@ def analyze(hosts, github, state, now):
         containers = host.get('runnerNames', [])
         memory = host.get('memoryByName', {})
         names = list(containers) + sorted(n for n in runners if host_of(n) == host['id'] and n not in containers)
+        vm = host.get('vm') or {}
+        if vm.get('state') not in (None, 'running', 'unknown'):
+            # The VM is down: GitHub's rows for it are stale registrations, not lanes. One host alert below.
+            names = []
         lanes = []
         for name in names:
             runner = runners.get(name)
@@ -311,11 +340,17 @@ def analyze(hosts, github, state, now):
                 detail = ''
             alert(key, '%s%s' % (disk.get('label') or '%s paused: low disk' % host['name'], detail), since)
 
-        if host['state'] in ('Unreachable', 'Stopped', 'Docker unavailable'):
+        if host['state'] in ('Unreachable', 'Stopped', 'Docker unavailable') or host['state'] in VM_LABELS.values():
             key = 'host:%s' % host['id']
             since = seen_since.setdefault(key, now)
             if now - since >= UNREACHABLE_ALERT_AFTER:
-                alert(key, '%s is %s for %dm' % (host['name'], host['state'].lower(), (now - since) // 60), since)
+                minutes = (now - since) // 60
+                if host['state'] in VM_LABELS.values():
+                    detail = vm.get('action') and ': %s' % vm['action'] or (
+                        vm.get('reason') and ' (vm-state.json %s)' % vm['reason'] or '')
+                    alert(key, '%s %s for %dm%s' % (host['name'], host['state'], minutes, detail), since)
+                else:
+                    alert(key, '%s is %s for %dm' % (host['name'], host['state'].lower(), minutes), since)
             else:
                 live_keys.add(key)
 
