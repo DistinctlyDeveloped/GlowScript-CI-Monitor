@@ -39,6 +39,8 @@ UNREACHABLE_ALERT_AFTER = 600
 IDLE_WHILE_QUEUED_AFTER = 300
 UNSERVABLE_AFTER = 600
 MAX_OLDEST = 5
+# The MacBook supervisor rewrites disk-state.json at least every 30s (GlowScript #2323); older means it stopped.
+DISK_STATE_FRESH = 300
 GENERIC_LABELS = {'self-hosted', 'Linux', 'X64', 'ARM64', 'macOS', 'Windows'}
 
 HOSTS = [
@@ -57,6 +59,17 @@ state = pathlib.Path.home() / 'glowscript-ci'
 def command(args, timeout=8):
     r = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     return r.returncode, r.stdout
+def disk_pause():
+    # GlowScript #2323: the MacBook supervisor stops admitting below 30 GB free and says so here.
+    try:
+        import time
+        value = json.loads((state / 'disk-state.json').read_text())
+        if value.get('state') in ('low', 'unknown') and time.time() - value['checked'] <= __DISK_STATE_FRESH__:
+            return {k: value.get(k) for k in ('state', 'free_bytes', 'resume_bytes', 'label', 'checked')}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+disk = disk_pause() if host == 'macbook' else None
 if host in ('simrig', 'hostinger'):
     docker = ['/usr/bin/docker']
     service = command(['systemctl', 'is-active', 'glowscript-' + host])[1].strip() == 'active'
@@ -67,7 +80,7 @@ else:
     service = code == 0 and 'state = running' in status
 code, output = command(docker + ['ps', '--filter', 'label=com.glowscript.ci=disposable', '--format', '{{.Names}}'])
 if code != 0:
-    print(json.dumps({'service': service, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': [], 'memoryByName': {}, 'proxy': None}))
+    print(json.dumps({'service': service, 'docker': False, 'paused': False, 'onAC': True, 'runnerNames': [], 'memoryUsage': [], 'memoryByName': {}, 'proxy': None, 'disk': disk}))
     sys.exit(0)
 prefix = 'glowscript-' + host + '-'
 names = [name for name in output.splitlines() if name.startswith(prefix)]
@@ -91,13 +104,18 @@ if host == 'macbook':
     on_ac = code == 0 and 'AC Power' in power
 paused = (state / 'PAUSED').exists() if host != 'studio' else False
 print(json.dumps({'service': service, 'docker': True, 'paused': paused, 'onAC': on_ac, 'runnerNames': names,
-                  'memoryUsage': [memory.get(n, '') for n in names], 'memoryByName': memory, 'proxy': proxy}))
-'''
+                  'memoryUsage': [memory.get(n, '') for n in names], 'memoryByName': memory, 'proxy': proxy,
+                  'disk': disk}))
+'''.replace('__DISK_STATE_FRESH__', str(DISK_STATE_FRESH))
 
 
 def classify(probe):
     if not probe['service']: return 'Stopped'
     if not probe['docker']: return 'Docker unavailable'
+    # Low disk first: it needs action, while PAUSED is a deliberate operator choice.
+    if probe.get('disk'):
+        reason = 'low disk' if probe['disk'].get('state') == 'low' else 'disk unreadable'
+        return ('Draining: ' if probe['runnerNames'] else 'Paused: ') + reason
     if probe['paused']: return 'Draining' if probe['runnerNames'] else 'Paused'
     if not probe['onAC']: return 'Draining on battery' if probe['runnerNames'] else 'On battery'
     return 'Online' if probe['runnerNames'] else 'Ready'
@@ -132,7 +150,7 @@ def collect(host):
             data = subprocess.check_output(args, timeout=22, stderr=subprocess.DEVNULL)
         probe = json.loads(data)
         result.update(state=classify(probe), runnerNames=probe['runnerNames'], memoryUsage=probe['memoryUsage'],
-                      memoryByName=probe.get('memoryByName', {}), proxy=probe.get('proxy'))
+                      memoryByName=probe.get('memoryByName', {}), proxy=probe.get('proxy'), disk=probe.get('disk'))
     except (subprocess.SubprocessError, OSError, ValueError, KeyError):
         result['state'] = 'Unreachable'
     return result
@@ -276,6 +294,18 @@ def analyze(hosts, github, state, now):
                 since = seen_since.setdefault(key, now)
                 alert(key, '%s: CI proxy is %s (%d restarts); its runners cannot reach GitHub'
                       % (host['name'], 'in a restart loop' if looping else proxy['state'], proxy['restarts']), since)
+
+        disk = host.get('disk')
+        if disk:
+            # No delay: admission is already closed, and a full Mac disk stops the VM (GlowScript #2323).
+            key = 'disk:%s' % host['id']
+            since = seen_since.setdefault(key, now)
+            if disk.get('state') == 'low' and isinstance(disk.get('free_bytes'), int):
+                detail = ' (%.1f GB free; admission reopens at %d GB)' % (
+                    disk['free_bytes'] / 1e9, (disk.get('resume_bytes') or 0) // 10**9)
+            else:
+                detail = ''
+            alert(key, '%s%s' % (disk.get('label') or '%s paused: low disk' % host['name'], detail), since)
 
         if host['state'] in ('Unreachable', 'Stopped', 'Docker unavailable'):
             key = 'host:%s' % host['id']
