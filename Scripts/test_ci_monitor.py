@@ -202,4 +202,111 @@ class HostingerLaneTests(unittest.TestCase):
     def test_hostinger_runners_are_attributed_to_their_host(self):
         self.assertEqual(collector.host_of('glowscript-hostinger-0-abcdef123456'), 'hostinger')
 
+class MacBookVmTests(unittest.TestCase):
+    """GlowScript #2300: the MacBook supervisor's ~/glowscript-ci/vm-state.json (contract from #2299)."""
+
+    def run_probe(self, vm_state=None, raw=None, docker_ok=False, now=None):
+        """Runs the real PROBE as the collector does, with HOME pointed at a temporary directory
+        and a stub docker. Read-only: it never touches the real VM or supervisor."""
+        import json, os, subprocess, tempfile, time
+        with tempfile.TemporaryDirectory() as home:
+            state = Path(home) / 'glowscript-ci'
+            state.mkdir()
+            docker = state / 'docker'
+            docker.write_text('#!/bin/sh\nexit %d\n' % (0 if docker_ok else 1))
+            docker.chmod(0o700)
+            if vm_state is not None:
+                raw = json.dumps(vm_state)
+            if raw is not None:
+                (state / 'vm-state.json').write_text(raw)
+            env = dict(os.environ, HOME=home)
+            out = subprocess.check_output(['/usr/bin/python3', '-c', collector.PROBE, 'macbook'], env=env, timeout=30)
+            return json.loads(out)
+
+    def fresh(self, current, **fields):
+        import time
+        return dict({'state': current, 'since': int(time.time()) - 900, 'checked': int(time.time()),
+                     'attempts': 2, 'retry_at': None}, **fields)
+
+    def classify(self, probe):
+        return collector.classify(dict(probe, service=True))
+
+    def test_running_vm_keeps_todays_classification(self):
+        probe = self.run_probe(self.fresh('running'), docker_ok=True)
+        self.assertEqual(probe['vm']['state'], 'running')
+        self.assertIn(self.classify(probe), ('Ready', 'On battery'))
+        # The supervisor only rewrites the file on Docker activity while running, so an old
+        # `checked` on a running VM is normal (observed 14h on 2026-10-07) and is not unknown.
+        old = dict(self.fresh('running'), checked=1)
+        self.assertEqual(self.run_probe(old, docker_ok=True)['vm']['state'], 'running')
+
+    def test_stopped_vm_reads_as_macbook_vm_down(self):
+        probe = self.run_probe(self.fresh('stopped', retry_at=None))
+        self.assertEqual(probe['vm']['state'], 'stopped')
+        self.assertFalse(probe['docker'])
+        self.assertEqual(self.classify(probe), 'VM down')
+
+    def test_held_and_broken_and_starting_name_themselves(self):
+        held = self.run_probe(self.fresh('held', markers=['PAUSED']))
+        self.assertEqual((self.classify(held), held['vm']['markers']), ('VM held', ['PAUSED']))
+        broken = self.run_probe(self.fresh('broken', action='inspect lima, then colima stop/start by hand'))
+        self.assertEqual(self.classify(broken), 'VM broken')
+        self.assertIn('colima stop', broken['vm']['action'])
+        self.assertEqual(self.classify(self.run_probe(self.fresh('starting'))), 'VM starting')
+
+    def test_missing_corrupt_stale_or_unrecognised_file_fails_closed_to_unknown(self):
+        cases = {
+            'missing': dict(),
+            'corrupt': dict(raw='{"state": "runn'),
+            'not an object': dict(raw='["running"]'),
+            'unrecognised state': dict(vm_state=self.fresh('healthy')),
+            'stale stopped': dict(vm_state=dict(self.fresh('stopped'), checked=1)),
+            'non-numeric checked': dict(vm_state=dict(self.fresh('stopped'), checked='now')),
+        }
+        for name, kwargs in cases.items():
+            for docker_ok in (True, False):
+                with self.subTest(name, docker_ok=docker_ok):
+                    probe = self.run_probe(docker_ok=docker_ok, **kwargs)
+                    self.assertEqual(probe['vm']['state'], 'unknown')
+                    label = self.classify(probe)
+                    self.assertEqual(label, 'VM unknown')
+                    self.assertNotIn(label, ('Online', 'Ready'))
+
+    def test_other_hosts_are_not_affected(self):
+        probe = {'service': True, 'docker': True, 'paused': False, 'onAC': True, 'runnerNames': []}
+        self.assertEqual(collector.classify(probe), 'Ready')
+        self.assertEqual(collector.classify(dict(probe, vm=None)), 'Ready')
+
+    def test_vm_down_replaces_stale_runner_rows_with_one_host_alert(self):
+        offline = [runner('glowscript-macbook-%d-old' % slot, status='offline') for slot in range(3)]
+        github = {'runners': offline, 'jobs': []}
+        state = {'mismatchSince': {'lane:glowscript-macbook-0-old': 0}}
+        down = {'state': 'stopped', 'since': 0, 'checked': 5000}
+        for now in (0, 5000):
+            hosts = [host('macbook', state='VM down')]
+            hosts[0]['vm'] = down
+            _, alerts = collector.analyze(hosts, github, state, now=now)
+        self.assertEqual(hosts[0]['lanes'], [])
+        self.assertEqual([a['key'] for a in alerts], ['host:macbook'])
+        self.assertEqual(alerts[0]['message'], 'MacBook VM down for 83m')
+        self.assertNotIn('lane:glowscript-macbook-0-old', state['mismatchSince'])
+
+    def test_broken_alert_carries_the_supervisors_action(self):
+        hosts = [host('macbook', state='VM broken')]
+        hosts[0]['vm'] = {'state': 'broken', 'action': 'run colima stop/start by hand'}
+        state = {}
+        collector.analyze(hosts, None, state, now=0)
+        _, alerts = collector.analyze(hosts, None, state, now=collector.UNREACHABLE_ALERT_AFTER)
+        self.assertEqual(alerts[0]['message'], 'MacBook VM broken for 10m: run colima stop/start by hand')
+
+    def test_unknown_vm_keeps_lanes_but_is_never_healthy(self):
+        github = {'runners': [runner('glowscript-macbook-0-a')], 'jobs': []}
+        hosts = [host('macbook', ['glowscript-macbook-0-a'], state='VM unknown')]
+        hosts[0]['vm'] = {'state': 'unknown', 'reason': 'missing'}
+        state = {}
+        collector.analyze(hosts, github, state, now=0)
+        self.assertEqual(len(hosts[0]['lanes']), 1)
+        _, alerts = collector.analyze(hosts, github, state, now=collector.UNREACHABLE_ALERT_AFTER)
+        self.assertEqual(alerts[0]['message'], 'MacBook VM unknown for 10m (vm-state.json missing)')
+
 if __name__ == '__main__': unittest.main()
