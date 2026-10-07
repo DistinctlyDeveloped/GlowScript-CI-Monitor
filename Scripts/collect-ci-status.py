@@ -45,9 +45,13 @@ HOSTS = [
     {'id': 'studio', 'name': 'Studio', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
     {'id': 'simrig', 'name': 'SimRig', 'expectedLanes': 2, 'cpuPerLane': 6, 'memoryGiBPerLane': 24},
     {'id': 'macbook', 'name': 'MacBook', 'expectedLanes': 3, 'cpuPerLane': 4, 'memoryGiBPerLane': 8},
-    # Dedicated Hostinger VPS (GlowScript #2093): two slots under the glowscript-hostinger systemd unit.
-    {'id': 'hostinger', 'name': 'Hostinger', 'expectedLanes': 2, 'cpuPerLane': 4, 'memoryGiBPerLane': 12},
+    # Dedicated Hostinger VPS (GlowScript #2093): slots 0-1 (4 CPUs / 12 GiB) plus slot 2, the
+    # 1-CPU / 2-GiB main-push aggregate lane (GlowScript #2347), under the glowscript-hostinger unit.
+    {'id': 'hostinger', 'name': 'Hostinger', 'expectedLanes': 3, 'cpuPerLane': 4, 'memoryGiBPerLane': 12},
 ]
+# GlowScript #2347: main's push-run required aggregates request this label. The dedicated runner
+# (Hostinger slot 2) carries it outside glowscript-pool; the light slots carry it as the fallback.
+MAIN_AGGREGATE = 'glowscript-main-aggregate'
 
 # Executed only by this collector on fixed, authorized hosts. Never provided by API data.
 PROBE = r'''
@@ -303,6 +307,21 @@ def analyze(hosts, github, state, now):
                  'unservableLabels': sorted({l for j in unservable for l in j['labels']} - GENERIC_LABELS),
                  'oldest': [{'name': j['name'], 'workflow': j['workflow'], 'branch': j['branch'], 'pr': j['pr'],
                              'waitSec': 0 if j['createdAt'] is None else int(now - j['createdAt']), 'url': j['url']} for j in oldest]}
+        carriers = [r for r in runners.values() if MAIN_AGGREGATE in r['labels']]
+        dedicated = [r for r in carriers if 'glowscript-pool' not in r['labels']]
+        queue['mainAggregate'] = {
+            'dedicated': [{'name': r['name'], 'status': r['status'], 'busy': r['busy']} for r in dedicated],
+            'fallbackOnline': sum(1 for r in carriers if r not in dedicated and r['status'] == 'online')}
+        if carriers and not any(r['status'] == 'online' for r in dedicated):
+            # The slot re-registers after every job; only a lasting gap means main's aggregates
+            # are back to queueing behind PR light jobs.
+            key = 'lane:main-aggregate'
+            since = seen_since.setdefault(key, now)
+            if now - since >= OFFLINE_ALERT_AFTER:
+                alert(key, 'Main-aggregate lane: no dedicated runner online for %dm; main\'s aggregates fall back to %d light runner(s)'
+                      % ((now - since) // 60, queue['mainAggregate']['fallbackOnline']), since)
+            else:
+                live_keys.add(key)
         for host in hosts:
             mine = [r for r in online if host_of(r['name']) == host['id']]
             host['eligibleQueued'] = sum(1 for j in self_hosted if any(can_run(r['labels'], j['labels']) for r in mine))

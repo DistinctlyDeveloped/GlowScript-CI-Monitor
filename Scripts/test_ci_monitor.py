@@ -140,6 +140,28 @@ class AnalysisTests(unittest.TestCase):
         self.assertEqual(queue['unservableLabels'], ['glowscript-nowhere'])
 
 
+    def test_main_aggregate_lane_reports_dedicated_runner_and_alerts_only_after_a_lasting_gap(self):
+        dedicated = ('self-hosted', 'Linux', 'X64', 'glowscript-hostinger-slot-2', 'glowscript-main-aggregate')
+        fallback = ('self-hosted', 'Linux', 'X64', 'glowscript-pool', 'glowscript-light', 'glowscript-main-aggregate')
+        hosts = [host('hostinger', ['glowscript-hostinger-2-a', 'glowscript-hostinger-0-a'])]
+        github = {'runners': [runner('glowscript-hostinger-2-a', labels=dedicated),
+                              runner('glowscript-hostinger-0-a', labels=fallback, busy=True)], 'jobs': []}
+        queue, alerts = collector.analyze(hosts, github, {}, now=0)
+        self.assertEqual(queue['mainAggregate'], {'dedicated': [{'name': 'glowscript-hostinger-2-a', 'status': 'online',
+                                                                 'busy': False}], 'fallbackOnline': 1})
+        self.assertIn('glowscript-main-aggregate', hosts[0]['pools'])
+        self.assertEqual(alerts, [])
+        state = {}
+        gone = {'runners': [runner('glowscript-hostinger-0-a', labels=fallback, busy=True)], 'jobs': []}
+        _, alerts = collector.analyze([host('hostinger', [])], gone, state, now=1000)
+        self.assertEqual(alerts, [])  # re-registering between jobs is not an outage
+        _, alerts = collector.analyze([host('hostinger', [])], gone, state, now=1000 + collector.OFFLINE_ALERT_AFTER)
+        self.assertEqual([a['key'] for a in alerts], ['lane:main-aggregate'])
+        self.assertIn('fall back to 1 light runner', alerts[0]['message'])
+        _, alerts = collector.analyze(hosts, github, state, now=2000 + collector.OFFLINE_ALERT_AFTER)
+        self.assertEqual(alerts, [])
+        self.assertNotIn('lane:main-aggregate', state['mismatchSince'])
+
     def test_pools_drop_generic_and_slot_labels(self):
         labels = ('self-hosted', 'Linux', 'ARM64', 'glowscript-studio', 'glowscript-macbook-canary', 'glowscript-macbook-slot-0')
         hosts = [host('macbook', ['glowscript-macbook-0-a'])]
@@ -165,7 +187,7 @@ class AnalysisTests(unittest.TestCase):
 class HostingerLaneTests(unittest.TestCase):
     def test_hosts_match_the_fleet_slot_layout(self):
         layout = {h['id']: (h['expectedLanes'], h['cpuPerLane'], h['memoryGiBPerLane']) for h in collector.HOSTS}
-        self.assertEqual(layout['hostinger'], (2, 4, 12))
+        self.assertEqual(layout['hostinger'], (3, 4, 12))  # slot 2: main-aggregate lane (#2347)
         self.assertEqual(layout['simrig'], (2, 6, 24))
 
     def test_hostinger_probe_runs_as_root_over_pinned_ssh_and_reads_its_systemd_unit(self):
