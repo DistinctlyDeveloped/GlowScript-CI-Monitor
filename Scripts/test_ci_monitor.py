@@ -67,6 +67,10 @@ def job(labels=('self-hosted', 'Linux', 'ARM64', 'glowscript-studio'), status='q
     return {'name': 'Lint gates', 'status': status, 'labels': list(labels), 'runner': runner_name, 'createdAt': created,
             'startedAt': None, 'url': None, 'branch': 'b', 'pr': 1, 'workflow': 'Tests'}
 
+def routing(labels=('self-hosted', 'Linux', 'glowscript-main-aggregate'), state='enabled'):
+    return {'state': state, 'headSHA': 'current',
+            'jobs': [{'workflow': 'test.yml', 'name': 'Vitest', 'runID': 1, 'labels': list(labels)}]}
+
 class AnalysisTests(unittest.TestCase):
     def test_low_disk_alerts_at_once_with_the_label(self):
         hosts = [host('macbook', state='Paused: low disk')]
@@ -187,22 +191,74 @@ class AnalysisTests(unittest.TestCase):
         fallback = ('self-hosted', 'Linux', 'X64', 'glowscript-pool', 'glowscript-light', 'glowscript-main-aggregate')
         hosts = [host('hostinger', ['glowscript-hostinger-2-a', 'glowscript-hostinger-0-a'])]
         github = {'runners': [runner('glowscript-hostinger-2-a', labels=dedicated),
-                              runner('glowscript-hostinger-0-a', labels=fallback, busy=True)], 'jobs': []}
+                              runner('glowscript-hostinger-0-a', labels=fallback, busy=True)], 'jobs': [],
+                  'mainAggregateRouting': routing()}
         queue, alerts = collector.analyze(hosts, github, {}, now=0)
-        self.assertEqual(queue['mainAggregate'], {'dedicated': [{'name': 'glowscript-hostinger-2-a', 'status': 'online',
-                                                                 'busy': False}], 'fallbackOnline': 1})
+        self.assertEqual(queue['mainAggregate']['dedicated'], [{'name': 'glowscript-hostinger-2-a', 'status': 'online',
+                                                                 'busy': False}])
+        self.assertEqual(queue['mainAggregate']['fallbackOnline'], 1)
+        self.assertEqual(queue['mainAggregate']['routingState'], 'enabled')
         self.assertIn('glowscript-main-aggregate', hosts[0]['pools'])
         self.assertEqual(alerts, [])
         state = {}
-        gone = {'runners': [runner('glowscript-hostinger-0-a', labels=fallback, busy=True)], 'jobs': []}
+        gone = {'runners': [runner('glowscript-hostinger-0-a', labels=fallback, busy=True)], 'jobs': [],
+                'mainAggregateRouting': routing()}
         _, alerts = collector.analyze([host('hostinger', [])], gone, state, now=1000)
         self.assertEqual(alerts, [])  # re-registering between jobs is not an outage
         _, alerts = collector.analyze([host('hostinger', [])], gone, state, now=1000 + collector.OFFLINE_ALERT_AFTER)
         self.assertEqual([a['key'] for a in alerts], ['lane:main-aggregate'])
-        self.assertIn('fall back to 1 light runner', alerts[0]['message'])
+        self.assertIn('1 qualified fallback runner', alerts[0]['message'])
         _, alerts = collector.analyze(hosts, github, state, now=2000 + collector.OFFLINE_ALERT_AFTER)
         self.assertEqual(alerts, [])
         self.assertNotIn('lane:main-aggregate', state['mismatchSince'])
+
+    def test_main_aggregate_disabled_with_advertised_carriers_never_alerts(self):
+        github = {'runners': [runner('fallback', labels=('self-hosted', 'Linux', 'glowscript-pool',
+                                                        'glowscript-light', 'glowscript-main-aggregate'))],
+                  'jobs': [], 'mainAggregateRouting': routing(('self-hosted', 'Linux', 'glowscript-light'), 'disabled')}
+        state = {}
+        collector.analyze([], github, state, now=1000)
+        queue, alerts = collector.analyze([], github, state, now=2000)
+        self.assertEqual(alerts, [])  # RED on the original collector: lane:main-aggregate
+        self.assertEqual(queue['mainAggregate']['routingState'], 'disabled')
+        self.assertIn('not enabled yet (fallback: 1 light', queue['mainAggregate']['message'])
+        self.assertNotIn('lane:main-aggregate', state['mismatchSince'])
+
+    def test_main_aggregate_enabled_with_no_carriers_alerts(self):
+        github = {'runners': [], 'jobs': [], 'mainAggregateRouting': routing()}
+        state = {}
+        collector.analyze([], github, state, now=1000)
+        _, alerts = collector.analyze([], github, state, now=1600)
+        self.assertEqual([a['key'] for a in alerts], ['lane:main-aggregate'])
+        self.assertIn('0 qualified fallback', alerts[0]['message'])
+
+    def test_main_aggregate_full_labels_required_and_busy_runner_is_qualified(self):
+        labels = ('self-hosted', 'Linux', 'X64', 'glowscript-main-aggregate')
+        github = {'runners': [runner('wrong-os', labels=('self-hosted', 'macOS', 'X64', 'glowscript-main-aggregate'))],
+                  'jobs': [], 'mainAggregateRouting': routing(labels)}
+        state = {}
+        collector.analyze([], github, state, now=1000)
+        _, alerts = collector.analyze([], github, state, now=1600)
+        self.assertEqual([a['key'] for a in alerts], ['lane:main-aggregate'])
+        github['runners'].append(runner('qualified-busy', busy=True, labels=labels))
+        _, alerts = collector.analyze([], github, state, now=1700)
+        self.assertEqual(alerts, [])
+        self.assertNotIn('lane:main-aggregate', state['mismatchSince'])
+
+    def test_main_aggregate_unknown_resets_gap_even_with_stale_enabled_cache(self):
+        github = {'runners': [], 'jobs': [], 'mainAggregateRouting': routing()}
+        for error in (None, 'GitHub unavailable (OSError)'):
+            state = {'mismatchSince': {'lane:main-aggregate': 100}}
+            if error is None: github.pop('mainAggregateRouting', None)
+            else: github['mainAggregateRouting'] = routing()
+            queue, alerts = collector.analyze([], github, state, now=2000, github_error=error)
+            self.assertEqual(alerts, [])
+            self.assertEqual(queue['mainAggregate']['routingState'], 'unknown')
+            self.assertIn('unknown', queue['mainAggregate']['message'])
+            self.assertNotIn('lane:main-aggregate', state['mismatchSince'])
+        github['mainAggregateRouting'] = routing()
+        _, alerts = collector.analyze([], github, state, now=2100)
+        self.assertEqual(alerts, [])  # recovery starts a new grace window
 
     def test_pools_drop_generic_and_slot_labels(self):
         labels = ('self-hosted', 'Linux', 'ARM64', 'glowscript-studio', 'glowscript-macbook-canary', 'glowscript-macbook-slot-0')
@@ -225,6 +281,38 @@ class AnalysisTests(unittest.TestCase):
             cached, error = collector.github_snapshot(directory, broken, now=2000)
             self.assertEqual(cached['fetchedAt'], 1000)
             self.assertIn('GitHub unavailable', error)
+
+class MainRoutingTests(unittest.TestCase):
+    def fetch(self, labels=None, sha='current', missing=False, failed=False, event='push'):
+        from unittest.mock import patch
+        def api(path):
+            if path.endswith('/commits/main'): return {'sha': 'current'}
+            if '/workflows/' in path:
+                return {'workflow_runs': [{'id': 1 if 'test.yml/' in path else 2,
+                                          'head_sha': sha, 'head_branch': 'main', 'event': event}]}
+            if failed: raise OSError('offline')
+            name = 'Vitest' if '/runs/1/' in path else 'TypeScript & Lint'
+            return {'jobs': [] if missing else [{'name': name, 'labels': labels or []}]}
+        with patch.object(collector, 'gh_api', side_effect=api):
+            return collector.fetch_main_aggregate_routing()
+
+    def test_current_main_evaluated_labels_enable_lane(self):
+        result = self.fetch(['self-hosted', 'Linux', 'glowscript-main-aggregate'])
+        self.assertEqual(result['state'], 'enabled')
+        self.assertEqual(result['headSHA'], 'current')
+        self.assertEqual(len(result['jobs']), 2)
+
+    def test_both_current_main_jobs_on_light_disable_lane(self):
+        self.assertEqual(self.fetch(['self-hosted', 'Linux', 'glowscript-light'])['state'], 'disabled')
+
+    def test_stale_revision_missing_labels_or_wrong_event_are_unknown(self):
+        for changes in ({'sha': 'previous'}, {'missing': True}, {'labels': []}, {'event': 'pull_request'}):
+            self.assertEqual(self.fetch(**changes)['state'], 'unknown')
+
+    def test_fetch_error_is_unknown(self):
+        result = self.fetch(failed=True)
+        self.assertEqual(result['state'], 'unknown')
+        self.assertIn('OSError', result['reason'])
 
 class HostingerLaneTests(unittest.TestCase):
     def test_hosts_match_the_fleet_slot_layout(self):

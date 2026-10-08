@@ -198,6 +198,37 @@ def parse_time(value):
     return calendar.timegm(time.strptime(value, '%Y-%m-%dT%H:%M:%SZ'))
 
 
+def fetch_main_aggregate_routing():
+    """Use evaluated main-push job labels, never labels advertised by runners.
+
+    A previous revision's run cannot establish current routing. Missing/skipped
+    jobs remain unknown until Actions exposes their evaluated runs-on labels.
+    """
+    evidence = []
+    try:
+        sha = gh_api('repos/%s/commits/main' % REPO)['sha']
+        for workflow, name in (('test.yml', 'Vitest'), ('typecheck.yml', 'TypeScript & Lint')):
+            runs = gh_api('repos/%s/actions/workflows/%s/runs?branch=main&event=push&per_page=1'
+                          % (REPO, workflow))['workflow_runs']
+            if not runs or runs[0]['head_sha'] != sha:
+                continue
+            run = runs[0]
+            if run.get('event') != 'push' or run.get('head_branch') != 'main':
+                continue
+            jobs = gh_api('repos/%s/actions/runs/%d/jobs?per_page=100&filter=latest'
+                          % (REPO, run['id']))['jobs']
+            matches = [j for j in jobs if j['name'] == name]
+            if len(matches) == 1 and matches[0].get('labels'):
+                evidence.append({'workflow': workflow, 'name': name, 'runID': run['id'],
+                                 'labels': matches[0]['labels']})
+        enabled = any(MAIN_AGGREGATE in j['labels'] for j in evidence)
+        return {'state': 'enabled' if enabled else 'disabled' if len(evidence) == 2 else 'unknown',
+                'headSHA': sha, 'jobs': evidence}
+    except (subprocess.SubprocessError, OSError, ValueError, KeyError) as error:
+        # A partial fetch is not evidence of disabled routing or healthy capacity.
+        return {'state': 'unknown', 'jobs': [], 'reason': 'Routing unavailable (%s)' % type(error).__name__}
+
+
 def fetch_github():
     runners = gh_api('repos/%s/actions/runners?per_page=100' % REPO)['runners']
     runs = {}
@@ -217,7 +248,7 @@ def fetch_github():
     return {'fetchedAt': time.time(),
             'runners': [{'name': r['name'], 'status': r['status'], 'busy': r['busy'],
                          'labels': [l['name'] for l in r['labels']]} for r in runners],
-            'jobs': jobs}
+            'jobs': jobs, 'mainAggregateRouting': fetch_main_aggregate_routing()}
 
 
 def github_snapshot(directory, fetch=fetch_github, now=None):
@@ -268,7 +299,7 @@ def lane_phase(container, mismatch_age):
     return 'degraded' if container else 'orphaned'
 
 
-def analyze(hosts, github, state, now):
+def analyze(hosts, github, state, now, github_error=None):
     """Adds lanes/pools per host, a queue summary and alerts. Mutates `state` (persisted between runs)."""
     runners = {r['name']: r for r in (github or {}).get('runners', [])}
     jobs = (github or {}).get('jobs', [])
@@ -374,17 +405,35 @@ def analyze(hosts, github, state, now):
                              'waitSec': 0 if j['createdAt'] is None else int(now - j['createdAt']), 'url': j['url']} for j in oldest]}
         carriers = [r for r in runners.values() if MAIN_AGGREGATE in r['labels']]
         dedicated = [r for r in carriers if 'glowscript-pool' not in r['labels']]
+        routing = (github.get('mainAggregateRouting') or {'state': 'unknown', 'jobs': []})
+        if github_error:
+            routing = {'state': 'unknown', 'jobs': [], 'reason': github_error}
+        requests = [j['labels'] for j in routing.get('jobs', []) if MAIN_AGGREGATE in j['labels']]
+        fallback_online = sum(1 for r in runners.values() if 'glowscript-light' in r['labels'] and r['status'] == 'online')
+        qualified = all(any(r['status'] == 'online' and can_run(r['labels'], labels)
+                            for r in dedicated) for labels in requests)
+        routing_state = routing['state']
+        if routing_state == 'disabled':
+            message = 'Main-aggregate: dedicated lane not enabled yet (fallback: %d light runner(s))' % fallback_online
+        elif routing_state == 'enabled' and requests:
+            message = 'Main-aggregate: dedicated lane enabled; %s' % ('qualified dedicated runner online' if qualified else 'no qualified dedicated runner online')
+        else:
+            routing_state = 'unknown'
+            message = 'Main-aggregate: routing/capacity unknown; %s' % routing.get('reason', 'awaiting current main aggregate job labels')
         queue['mainAggregate'] = {
             'dedicated': [{'name': r['name'], 'status': r['status'], 'busy': r['busy']} for r in dedicated],
-            'fallbackOnline': sum(1 for r in carriers if r not in dedicated and r['status'] == 'online')}
-        if carriers and not any(r['status'] == 'online' for r in dedicated):
+            'fallbackOnline': fallback_online, 'routingState': routing_state,
+            'message': message, 'routingEvidence': routing}
+        if routing_state == 'enabled' and requests and not qualified:
             # The slot re-registers after every job; only a lasting gap means main's aggregates
             # are back to queueing behind PR light jobs.
             key = 'lane:main-aggregate'
             since = seen_since.setdefault(key, now)
             if now - since >= OFFLINE_ALERT_AFTER:
-                alert(key, 'Main-aggregate lane: no dedicated runner online for %dm; main\'s aggregates fall back to %d light runner(s)'
-                      % ((now - since) // 60, queue['mainAggregate']['fallbackOnline']), since)
+                fallback_qualified = sum(1 for r in carriers if 'glowscript-pool' in r['labels'] and r['status'] == 'online'
+                                         and all(can_run(r['labels'], labels) for labels in requests))
+                alert(key, 'Main-aggregate lane: no qualified dedicated runner online for %dm; %d qualified fallback runner(s) online'
+                      % ((now - since) // 60, fallback_qualified), since)
             else:
                 live_keys.add(key)
         for host in hosts:
@@ -443,7 +492,7 @@ def main():
         try: state = json.loads(state_path.read_text())
         except (OSError, ValueError): state = {}
         now = time.time()
-        queue, alerts = analyze(hosts, github, state, now)
+        queue, alerts = analyze(hosts, github, state, now, github_error=github_error)
         for host in hosts: host.pop('memoryByName', None)
         if '--no-notify' not in sys.argv: notify(alerts, state)
         write_json(state_path, state)

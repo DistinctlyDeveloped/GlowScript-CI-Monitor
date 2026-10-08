@@ -23,6 +23,11 @@ struct CIQueue: Codable, Sendable {
     let unservable: Int
     let unservableLabels: [String]
     let oldest: [CIQueuedJob]
+    var mainAggregate: CIMainAggregate? = nil
+}
+
+struct CIMainAggregate: Codable, Sendable {
+    var message: String? = nil
 }
 
 struct CIQueuedJob: Codable, Sendable, Identifiable {
