@@ -461,12 +461,16 @@ def analyze(hosts, github, state, now, github_error=None):
 
 
 def notify(alerts, state):
-    """macOS notification once per newly raised alert."""
+    """Attempt a macOS notification once per newly raised alert, even if delivery fails."""
     announced = set(state.get('announced', []))
     for item in alerts:
         if item['key'] in announced: continue
         script = 'display notification %s with title "GlowScript CI"' % json.dumps(item['message'])
-        subprocess.run(['/usr/bin/osascript', '-e', script], timeout=5, capture_output=True)
+        try:
+            subprocess.run(['/usr/bin/osascript', '-e', script], timeout=5, capture_output=True)
+        except (subprocess.SubprocessError, OSError) as error:
+            # Notification delivery must not prevent snapshot/state persistence. Do not log payloads.
+            print('Notification unavailable (%s)' % type(error).__name__, file=sys.stderr)
     state['announced'] = sorted(a['key'] for a in alerts)
 
 

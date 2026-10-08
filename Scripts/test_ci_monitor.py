@@ -282,6 +282,90 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(cached['fetchedAt'], 1000)
             self.assertIn('GitHub unavailable', error)
 
+class NotificationPersistenceTests(unittest.TestCase):
+    def setUp(self):
+        import contextlib, copy, io, tempfile
+        from unittest.mock import patch
+        self.stack = contextlib.ExitStack()
+        self.addCleanup(self.stack.close)
+        self.directory = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
+        self.output = self.directory / 'Library/Application Support/Octowatch'
+        self.stderr = io.StringIO()
+        low_disk = host('macbook', state='Paused: low disk')
+        low_disk['disk'] = {'state': 'low', 'free_bytes': 1, 'resume_bytes': 35 * 10**9}
+        self.stack.enter_context(patch.object(collector.Path, 'home', return_value=self.directory))
+        self.stack.enter_context(patch.object(collector, 'HOSTS', [low_disk]))
+        self.stack.enter_context(patch.object(collector, 'collect', side_effect=copy.deepcopy))
+        self.stack.enter_context(patch.object(collector, 'github_snapshot', return_value=(
+            {'fetchedAt': 1000, 'runners': [], 'jobs': []}, None)))
+        self.stack.enter_context(patch.object(collector.time, 'time', return_value=1000))
+        self.stack.enter_context(patch.object(collector.sys, 'argv', ['collect-ci-status.py']))
+        self.stack.enter_context(patch.object(collector.sys, 'stderr', self.stderr))
+        self.notification = self.stack.enter_context(patch.object(collector.subprocess, 'run'))
+
+    def assert_persisted_alert(self):
+        import json
+        state = json.loads((self.output / 'monitor-state.json').read_text())
+        snapshot = json.loads((self.output / 'ci-status.json').read_text())
+        self.assertEqual(state['announced'], ['disk:macbook'])
+        self.assertEqual(state['mismatchSince']['disk:macbook'], 1000)
+        self.assertEqual(snapshot['generatedAt'], 1000)
+        self.assertEqual(snapshot['githubObservedAt'], 1000)
+        self.assertEqual([item['key'] for item in snapshot['alerts']], ['disk:macbook'])
+        return state, snapshot
+
+    def test_notification_timeout_preserves_both_outputs_and_deduplicates(self):
+        self.notification.side_effect = collector.subprocess.TimeoutExpired(
+            ['private-command'], 5, output=b'private-output', stderr=b'private-error')
+        collector.main()
+        self.assert_persisted_alert()
+        self.assertEqual(self.stderr.getvalue(), 'Notification unavailable (TimeoutExpired)\n')
+        collector.main()
+        self.assert_persisted_alert()
+        self.notification.assert_called_once()
+
+    def test_notification_startup_error_preserves_both_outputs(self):
+        self.notification.side_effect = OSError('private-startup-detail')
+        collector.main()
+        self.assert_persisted_alert()
+        self.assertEqual(self.stderr.getvalue(), 'Notification unavailable (OSError)\n')
+
+    def test_notification_nonzero_return_keeps_existing_attempt_semantics(self):
+        self.notification.return_value = collector.subprocess.CompletedProcess([], 1)
+        collector.main()
+        self.assert_persisted_alert()
+        collector.main()
+        self.notification.assert_called_once()
+        self.assertEqual(self.stderr.getvalue(), '')
+
+    def test_failed_notification_does_not_skip_other_alerts_and_rearms_after_clear(self):
+        state = {}
+        alerts = [{'key': 'first', 'message': 'First'}, {'key': 'second', 'message': 'Second'}]
+        self.notification.side_effect = [OSError('private'), collector.subprocess.CompletedProcess([], 0),
+                                         collector.subprocess.CompletedProcess([], 0)]
+        collector.notify(alerts, state)
+        self.assertEqual(self.notification.call_count, 2)
+        self.assertEqual(state['announced'], ['first', 'second'])
+        collector.notify(alerts, state)
+        self.assertEqual(self.notification.call_count, 2)
+        collector.notify([], state)
+        collector.notify(alerts[:1], state)
+        self.assertEqual(self.notification.call_count, 3)
+
+    def test_analysis_errors_still_propagate(self):
+        from unittest.mock import patch
+        with patch.object(collector, 'analyze', side_effect=RuntimeError('analysis failed')):
+            with self.assertRaisesRegex(RuntimeError, 'analysis failed'):
+                collector.main()
+        self.notification.assert_not_called()
+
+    def test_persistence_errors_still_propagate_after_notification_failure(self):
+        from unittest.mock import patch
+        self.notification.side_effect = OSError('notification failed')
+        with patch.object(collector, 'write_json', side_effect=OSError('persistence failed')):
+            with self.assertRaisesRegex(OSError, 'persistence failed'):
+                collector.main()
+
 class MainRoutingTests(unittest.TestCase):
     def fetch(self, labels=None, sha='current', missing=False, failed=False, event='push'):
         from unittest.mock import patch
