@@ -10,14 +10,14 @@ struct SignInView: View {
 
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 40))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.monitorSecondary)
 
             Text("GlowScript CI Monitor")
                 .font(.title2.bold())
 
             Text("Enter a Personal Access Token\nwith **repo** and **workflow** scopes.")
                 .font(.callout)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.monitorSecondary)
                 .multilineTextAlignment(.center)
 
             SecureField("ghp_...", text: $pat)
@@ -49,7 +49,7 @@ struct SignInView: View {
                 NSApplication.shared.terminate(nil)
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.monitorSecondary)
             .font(.caption)
             .padding(.bottom, 8)
         }

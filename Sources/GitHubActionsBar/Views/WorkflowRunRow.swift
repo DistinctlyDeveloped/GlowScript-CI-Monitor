@@ -22,27 +22,27 @@ struct WorkflowRunRow: View {
                         .lineLimit(1)
 
                     if let title = run.displayTitle {
-                        Text(title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(title).font(.caption).foregroundStyle(.monitorSecondary).lineLimit(1)
                     }
                     HStack(spacing: 4) {
                         if let number = run.pullRequests?.first?.number {
-                            Text("PR #\(String(number))").foregroundStyle(.secondary)
+                            Text("PR #\(String(number))").foregroundStyle(.monitorSecondary)
                         }
                         if let repoName = run.repository?.fullName {
                             Text(repoName)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.monitorSecondary)
                         }
                         if let branch = run.headBranch {
                             Text("·")
                                 .foregroundStyle(.quaternary)
                             Text(branch)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.monitorSecondary)
                         }
                         if let duration = formattedDuration {
                             Text("·")
                                 .foregroundStyle(.quaternary)
                             Text(duration)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.monitorTertiary)
                         }
                     }
                     .font(.caption)
@@ -56,7 +56,7 @@ struct WorkflowRunRow: View {
                         for: run.updatedAt, relativeTo: now)
                 )
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.monitorTertiary)
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 16)

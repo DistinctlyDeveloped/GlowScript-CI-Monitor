@@ -10,9 +10,9 @@ struct WorkflowRunListView: View {
                 Spacer()
                 Image(systemName: "tray")
                     .font(.title)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.monitorSecondary)
                 Text("No workflow runs")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.monitorSecondary)
                 Spacer()
             }
             .frame(maxWidth: .infinity)

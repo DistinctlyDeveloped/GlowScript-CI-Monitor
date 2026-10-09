@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct CIDashboardView: View {
+    @Environment(\.self) private var environment
+    private var secondaryText: Color { MonitorTextStyle.secondary.resolve(in: environment) }
     @Bindable var viewModel: WorkflowViewModel
     @State private var runFilter = "All branches"
     @State private var jobFilter = "Active"
@@ -45,13 +47,13 @@ struct CIDashboardView: View {
                             ForEach(["Active", "Failures", "All"], id: \.self) { Text($0) }
                         }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16).padding(.bottom, 10)
                         Text(viewModel.jobsError ?? "Details from \(viewModel.detailedRunCount) recent runs · refreshed \(age(viewModel.lastJobsRefresh, now: clock.date))\(viewModel.jobsTruncated ? " · partial job list" : "")")
-                            .font(.caption2).foregroundStyle(viewModel.jobsError == nil ? Color.secondary : Color.orange)
+                            .font(.caption2).foregroundStyle(viewModel.jobsError == nil ? secondaryText : Color.orange)
                             .padding(.horizontal, 16).padding(.bottom, 6)
                         ScrollView {
                             LazyVStack(spacing: 0) {
                                 if shownJobs.isEmpty {
                                     Text(viewModel.lastJobsRefresh == nil ? "Waiting for job details…" : "No matching jobs in this snapshot")
-                                        .font(.callout).foregroundStyle(.secondary).padding(24)
+                                        .font(.callout).foregroundStyle(.monitorSecondary).padding(24)
                                 }
                                 ForEach(shownJobs) { item in
                                     jobRow(item, now: clock.date)
@@ -68,7 +70,7 @@ struct CIDashboardView: View {
     private func sectionHeader(_ title: String, count: Int) -> some View {
         HStack {
             Text(title).font(.headline)
-            Text("\(count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            Text("\(count)").font(.caption.monospacedDigit()).foregroundStyle(.monitorSecondary)
             Spacer()
         }.padding(.horizontal, 16).padding(.top, 14).padding(.bottom, 10)
     }
@@ -79,7 +81,7 @@ struct CIDashboardView: View {
                 Label("Local CI", systemImage: "server.rack").font(.headline)
                 Spacer()
                 Text("GitHub updated \(age(viewModel.lastRefresh, now: now))")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.monitorSecondary)
             }
             if let snapshot = viewModel.localSnapshot {
                 let stale = snapshot.isStale(at: now) || viewModel.localStatusError != nil
@@ -102,7 +104,7 @@ struct CIDashboardView: View {
                 else { sampledMetrics(now: now) }
             } else {
                 Label("Host monitoring has not reported yet. GitHub job details are available below.", systemImage: "network")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.callout).foregroundStyle(.monitorSecondary)
                 sampledMetrics(now: now)
             }
         }.padding(16)
@@ -129,7 +131,7 @@ struct CIDashboardView: View {
                 metric("Idle runners", queue.idleRunners)
                 Spacer()
                 Text("All active runs\(observedAt.map { " · \(age(Date(timeIntervalSince1970: $0), now: now))" } ?? "")\(queue.hosted > 0 ? " · +\(queue.hosted) GitHub-hosted" : "")")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.caption2).foregroundStyle(.monitorSecondary)
             }
             if queue.idleEligible > 0 {
                 Label("\(queue.idleEligible) idle runner(s) could take queued work", systemImage: "hourglass")
@@ -142,7 +144,7 @@ struct CIDashboardView: View {
             if !queue.oldest.isEmpty {
                 Text("Waiting longest: " + queue.oldest.prefix(3).map { job in
                     "\(job.name) (\(job.pr.map { "#\($0)" } ?? job.branch ?? "?"), \(minutes(job.waitSec)))"
-                }.joined(separator: " · ")).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }.joined(separator: " · ")).font(.caption2).foregroundStyle(.monitorSecondary).lineLimit(1)
             }
         }
     }
@@ -154,21 +156,21 @@ struct CIDashboardView: View {
             metric("Recent failures", viewModel.trackedJobs.filter { ["failure", "timed_out", "startup_failure"].contains($0.job.conclusion ?? "") }.count)
             Spacer()
             Text("Sampled from \(viewModel.detailedRunCount) recent runs\(viewModel.jobsError != nil || now.timeIntervalSince(viewModel.lastJobsRefresh ?? .distantPast) > 90 ? " · stale" : "")")
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(.monitorSecondary)
         }
     }
 
     private func metric(_ label: String, _ count: Int, warn: Bool = false) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Text("\(count)").font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(warn ? Color.orange : Color.primary)
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.caption).foregroundStyle(.monitorSecondary)
         }
     }
 
     private func duration(_ label: String, _ seconds: Int, warn: Bool) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Text(minutes(seconds)).font(.title3.weight(.semibold).monospacedDigit()).foregroundStyle(warn ? Color.orange : Color.primary)
-            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(label).font(.caption).foregroundStyle(.monitorSecondary)
         }
     }
 
@@ -187,38 +189,38 @@ struct CIDashboardView: View {
                 Text(host.name).font(.subheadline.weight(.semibold)).lineLimit(1)
                 Spacer()
                 Text(label).font(.caption.weight(.medium))
-                    .foregroundStyle(host.isDegraded && !stale ? Color.red : (alarming ? Color.orange : Color.secondary))
+                    .foregroundStyle(host.isDegraded && !stale ? Color.red : (alarming ? Color.orange : secondaryText))
             }
             Text("\(unreachable ? "—" : String(host.onlineLanes)) / \(host.expectedLanes) lanes online\(host.lanes == nil ? " (containers)" : "")")
                 .font(.callout.monospacedDigit()).lineLimit(1)
             Group {
                 if let proxy = host.proxy, !unreachable {
                     Text(proxy.isHealthy ? "Proxy running" : "Proxy \(proxy.looping == true ? "restart loop" : proxy.state) · \(proxy.restarts) restarts")
-                        .foregroundStyle(proxy.isHealthy ? Color.secondary : Color.red)
+                        .foregroundStyle(proxy.isHealthy ? secondaryText : Color.red)
                 } else {
-                    Text("Proxy —").foregroundStyle(.tertiary)
+                    Text("Proxy —").foregroundStyle(.monitorTertiary)
                 }
             }.font(.caption).lineLimit(1)
             let lanes = unreachable ? [] : (host.lanes ?? [])
             ForEach(lanes) { lane in laneRow(lane, now: now) }
             if lanes.isEmpty {
                 Text(unreachable ? "Lane status unknown" : (host.runnerNames.isEmpty ? "No runner containers observed" : "Lane detail not reported yet"))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption).foregroundStyle(.monitorSecondary).lineLimit(1)
             }
             ForEach(0..<max(0, laneSlots - max(lanes.count, 1)), id: \.self) { _ in laneRowPlaceholder }
             Group {
                 if let eligible = host.eligibleQueued, let queued = viewModel.localSnapshot?.queue?.queued, queued > 0, !unreachable {
                     Text(eligible == 0 ? "Can take none of the \(queued) queued jobs" : "Can take \(eligible) of \(queued) queued jobs")
-                        .foregroundStyle(eligible == 0 ? Color.orange : Color.secondary)
+                        .foregroundStyle(eligible == 0 ? Color.orange : secondaryText)
                 } else {
                     Text(" ")
                 }
             }.font(.caption).lineLimit(1)
             Text("Serves: " + ((host.pools ?? []).isEmpty ? "—" : (host.pools ?? []).joined(separator: ", ")))
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail).help((host.pools ?? []).joined(separator: ", "))
+                .font(.caption2).foregroundStyle(.monitorSecondary).lineLimit(1).truncationMode(.tail).help((host.pools ?? []).joined(separator: ", "))
             Spacer(minLength: 0)
             Text("Each: \(host.cpuPerLane) CPUs · \(host.memoryGiBPerLane) GiB limit")
-                .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                .font(.caption2).foregroundStyle(.monitorTertiary).lineLimit(1)
         }.padding(12).frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).stroke(host.isDegraded && !stale ? Color.red.opacity(0.5) : Color.primary.opacity(0.08)))
@@ -247,14 +249,14 @@ struct CIDashboardView: View {
                 Text("\(job.name)\(job.pr.map { " · #\($0)" } ?? "")").font(.caption).lineLimit(1)
                 Spacer(minLength: 4)
                 if let start = job.startedAt {
-                    Text("\(max(0, Int(now.timeIntervalSince1970 - start) / 60))m").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    Text("\(max(0, Int(now.timeIntervalSince1970 - start) / 60))m").font(.caption2.monospacedDigit()).foregroundStyle(.monitorSecondary)
                 }
             } else {
-                Text(status.0).font(.caption).foregroundStyle(status.1 == .secondary ? Color.secondary : status.1).lineLimit(1)
+                Text(status.0).font(.caption).foregroundStyle((lane.isTransitional || status.1 == .secondary) ? secondaryText : status.1).lineLimit(1)
                 Spacer(minLength: 4)
             }
             if let memory = lane.memory, !memory.isEmpty {
-                Text(memory).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                Text(memory).font(.caption2.monospacedDigit()).foregroundStyle(.monitorTertiary)
             }
         }.help(lane.name)
     }
@@ -268,13 +270,13 @@ struct CIDashboardView: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline) {
                     Image(systemName: item.job.status == "completed" ? (item.job.conclusion == "success" ? "checkmark.circle" : "minus.circle") : "clock")
-                        .foregroundStyle(item.job.conclusion == "failure" ? Color.red : Color.secondary)
+                        .foregroundStyle(item.job.conclusion == "failure" ? Color.red : secondaryText)
                     Text(item.job.name).font(.callout.weight(.medium)).lineLimit(1)
                     Spacer()
                     Text(item.job.location).font(.caption.weight(.medium))
                 }
                 Text([item.run.repository?.fullName, item.run.headBranch, item.run.headSha.map { String($0.prefix(7)) }].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption).foregroundStyle(.monitorSecondary).lineLimit(1)
                 HStack {
                     Text(item.job.currentStep ?? item.job.conclusion ?? item.job.status.replacingOccurrences(of: "_", with: " "))
                         .lineLimit(1)
@@ -282,7 +284,7 @@ struct CIDashboardView: View {
                     if item.job.status == "in_progress", let start = item.job.startedAt {
                         Text("\(max(0, Int(now.timeIntervalSince(start) / 60)))m elapsed").monospacedDigit()
                     }
-                }.font(.caption2).foregroundStyle(.secondary)
+                }.font(.caption2).foregroundStyle(.monitorSecondary)
             }.padding(.horizontal, 16).padding(.vertical, 10).contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
