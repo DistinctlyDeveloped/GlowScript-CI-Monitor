@@ -95,13 +95,13 @@ struct SettingsView: View {
 
                             Text("\(viewModel.selectedRepoFullNames.count) selected")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.monitorSecondary)
                         }
 
                         if viewModel.repos.isEmpty {
                             Text("No repositories found.")
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.monitorSecondary)
                         } else {
                             ForEach(viewModel.repos) { repo in
                                 Toggle(isOn: Binding(
@@ -122,7 +122,7 @@ struct SettingsView: View {
                                         if repo.isPrivate {
                                             Text("Private")
                                                 .font(.caption2)
-                                                .foregroundStyle(.secondary)
+                                                .foregroundStyle(.monitorSecondary)
                                         }
                                     }
                                 }

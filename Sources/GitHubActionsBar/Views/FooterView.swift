@@ -8,7 +8,7 @@ struct FooterView: View {
         HStack {
             Label(username, systemImage: "person.circle")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.monitorSecondary)
                 .lineLimit(1)
 
             Spacer()
@@ -18,7 +18,7 @@ struct FooterView: View {
             }
             .buttonStyle(.plain)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.monitorSecondary)
 
             Text("·")
                 .foregroundStyle(.quaternary)
@@ -28,7 +28,7 @@ struct FooterView: View {
             }
             .buttonStyle(.plain)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.monitorSecondary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
