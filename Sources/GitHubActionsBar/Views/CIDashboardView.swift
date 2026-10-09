@@ -133,6 +133,9 @@ struct CIDashboardView: View {
                 Text("All active runs\(observedAt.map { " · \(age(Date(timeIntervalSince1970: $0), now: now))" } ?? "")\(queue.hosted > 0 ? " · +\(queue.hosted) GitHub-hosted" : "")")
                     .font(.caption2).foregroundStyle(.monitorSecondary)
             }
+            if let message = queue.mainAggregate?.message {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
             if queue.idleEligible > 0 {
                 Label("\(queue.idleEligible) idle runner(s) could take queued work", systemImage: "hourglass")
                     .font(.caption).foregroundStyle(.orange)

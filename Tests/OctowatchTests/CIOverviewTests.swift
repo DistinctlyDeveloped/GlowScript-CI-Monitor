@@ -3,6 +3,23 @@ import Testing
 @testable import Octowatch
 
 struct CIOverviewTests {
+    @Test func mainAggregateStatusDecodesWithoutBreakingOlderSnapshots() throws {
+        let queue: [String: Any] = ["queued": 0, "hosted": 0, "running": 0, "oldestWaitSec": 0,
+            "medianWaitSec": 0, "idleRunners": 0, "idleEligible": 0, "unservable": 0,
+            "unservableLabels": [], "oldest": []]
+        let decoder = JSONDecoder()
+        let old = try decoder.decode(CIQueue.self, from: JSONSerialization.data(withJSONObject: queue))
+        #expect(old.mainAggregate == nil)
+        var current = queue
+        current["mainAggregate"] = ["dedicated": [], "fallbackOnline": 4] as [String: Any]
+        let legacy = try decoder.decode(CIQueue.self, from: JSONSerialization.data(withJSONObject: current))
+        #expect(legacy.mainAggregate?.message == nil)
+        current["mainAggregate"] = ["message": "Main-aggregate: routing/capacity unknown",
+                                    "routingState": "unknown", "routingEvidence": ["jobs": []]] as [String: Any]
+        let decoded = try decoder.decode(CIQueue.self, from: JSONSerialization.data(withJSONObject: current))
+        #expect(decoded.mainAggregate?.message == "Main-aggregate: routing/capacity unknown")
+    }
+
     func decode(_ runner: String?, labels: [String], status: String = "queued") throws -> CIJob {
         var object: [String: Any] = ["id": 42, "name": "Tests", "status": status, "labels": labels,
             "steps": [["name": "Install", "status": "completed"], ["name": "Run tests", "status": "in_progress"]]]
