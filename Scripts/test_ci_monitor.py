@@ -367,7 +367,8 @@ class NotificationPersistenceTests(unittest.TestCase):
                 collector.main()
 
 class MainRoutingTests(unittest.TestCase):
-    def fetch(self, labels=None, sha='current', missing=False, failed=False, event='push'):
+    def fetch(self, labels=None, sha='current', missing=False, failed=False, event='push',
+              missing_workflows=(), labels_by_workflow=None):
         from unittest.mock import patch
         def api(path):
             if path.endswith('/commits/main'): return {'sha': 'current'}
@@ -375,8 +376,11 @@ class MainRoutingTests(unittest.TestCase):
                 return {'workflow_runs': [{'id': 1 if 'test.yml/' in path else 2,
                                           'head_sha': sha, 'head_branch': 'main', 'event': event}]}
             if failed: raise OSError('offline')
+            workflow = 'test.yml' if '/runs/1/' in path else 'typecheck.yml'
+            if workflow in missing_workflows: return {'jobs': []}
             name = 'Vitest' if '/runs/1/' in path else 'TypeScript & Lint'
-            return {'jobs': [] if missing else [{'name': name, 'labels': labels or []}]}
+            job_labels = (labels_by_workflow or {}).get(workflow, labels or [])
+            return {'jobs': [] if missing else [{'name': name, 'labels': job_labels}]}
         with patch.object(collector, 'gh_api', side_effect=api):
             return collector.fetch_main_aggregate_routing()
 
@@ -388,6 +392,35 @@ class MainRoutingTests(unittest.TestCase):
 
     def test_both_current_main_jobs_on_light_disable_lane(self):
         self.assertEqual(self.fetch(['self-hosted', 'Linux', 'glowscript-light'])['state'], 'disabled')
+
+    def test_complete_mixed_labels_still_enable_when_one_job_uses_aggregate(self):
+        result = self.fetch(labels_by_workflow={
+            'test.yml': ['self-hosted', 'Linux', 'glowscript-main-aggregate'],
+            'typecheck.yml': ['self-hosted', 'Linux', 'glowscript-light'],
+        })
+        self.assertEqual(result['state'], 'enabled')
+        self.assertEqual(len(result['jobs']), 2)
+
+    def test_partial_current_main_evidence_is_unknown(self):
+        aggregate = ['self-hosted', 'Linux', 'glowscript-main-aggregate']
+        for options in (
+            {'missing_workflows': ('typecheck.yml',)},
+            {'empty_typecheck_labels': True},
+        ):
+            with self.subTest(options=options):
+                labels_by_workflow = {'test.yml': aggregate}
+                if options.pop('empty_typecheck_labels', False):
+                    labels_by_workflow['typecheck.yml'] = []
+                result = self.fetch(labels_by_workflow=labels_by_workflow, **options)
+                self.assertEqual(result['state'], 'unknown')
+                self.assertEqual(len(result['jobs']), 1)
+                github = {'runners': [runner('dedicated', labels=(
+                    'self-hosted', 'Linux', 'X64', 'glowscript-main-aggregate'))],
+                    'jobs': [], 'mainAggregateRouting': result}
+                queue, alerts = collector.analyze([], github, {}, now=1000)
+                self.assertEqual(queue['mainAggregate']['routingState'], 'unknown')
+                self.assertIn('routing/capacity unknown', queue['mainAggregate']['message'])
+                self.assertEqual(alerts, [])
 
     def test_stale_revision_missing_labels_or_wrong_event_are_unknown(self):
         for changes in ({'sha': 'previous'}, {'missing': True}, {'labels': []}, {'event': 'pull_request'}):

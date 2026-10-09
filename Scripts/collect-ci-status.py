@@ -221,8 +221,9 @@ def fetch_main_aggregate_routing():
             if len(matches) == 1 and matches[0].get('labels'):
                 evidence.append({'workflow': workflow, 'name': name, 'runID': run['id'],
                                  'labels': matches[0]['labels']})
-        enabled = any(MAIN_AGGREGATE in j['labels'] for j in evidence)
-        return {'state': 'enabled' if enabled else 'disabled' if len(evidence) == 2 else 'unknown',
+        complete = len(evidence) == 2
+        enabled = complete and any(MAIN_AGGREGATE in j['labels'] for j in evidence)
+        return {'state': 'enabled' if enabled else 'disabled' if complete else 'unknown',
                 'headSHA': sha, 'jobs': evidence}
     except (subprocess.SubprocessError, OSError, ValueError, KeyError) as error:
         # A partial fetch is not evidence of disabled routing or healthy capacity.
