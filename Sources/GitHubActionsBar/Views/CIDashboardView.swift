@@ -241,12 +241,13 @@ struct CIDashboardView: View {
         }()
         return HStack(alignment: .firstTextBaseline, spacing: 6) {
             Circle().fill(status.1).frame(width: 7, height: 7)
-            Text(lane.shortName).font(.caption.monospacedDigit().weight(.medium))
+            Text(lane.shortName).font(.caption.monospacedDigit().weight(.medium)).lineLimit(1).fixedSize()
             if let job = lane.job {
                 Text("\(job.name)\(job.pr.map { " · #\($0)" } ?? "")").font(.caption).lineLimit(1)
                 Spacer(minLength: 4)
                 if let start = job.startedAt {
                     Text("\(max(0, Int(now.timeIntervalSince1970 - start) / 60))m").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                        .fixedSize()
                 }
             } else {
                 Text(status.0).font(.caption).foregroundStyle(status.1 == .secondary ? Color.secondary : status.1).lineLimit(1)
@@ -254,6 +255,7 @@ struct CIDashboardView: View {
             }
             if let memory = lane.memory, !memory.isEmpty {
                 Text(memory).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                    .lineLimit(1).fixedSize()
             }
         }.help(lane.name)
     }

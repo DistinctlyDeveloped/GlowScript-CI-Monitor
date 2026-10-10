@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct GitHubActionsBarApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var viewModel = WorkflowViewModel()
 
     var body: some Scene {
@@ -12,6 +13,7 @@ struct GitHubActionsBarApp: App {
         } label: {
             MenuBarLabel(repoStatuses: viewModel.repoStatuses, pulsePhase: viewModel.pulsePhase,
                          ciAlert: !(viewModel.localSnapshot?.activeAlerts.isEmpty ?? true))
+                .background(DeepLinkWindowOpener())
         }
         .menuBarExtraStyle(.window)
 
@@ -20,5 +22,8 @@ struct GitHubActionsBarApp: App {
         }
         .defaultSize(width: 1100, height: 750)
         .windowResizability(.contentMinSize)
+        // Only glowscript-ci://tracker links open this window; without this a Window scene
+        // claims every URL, including the popover link.
+        .handlesExternalEvents(matching: ["tracker"])
     }
 }

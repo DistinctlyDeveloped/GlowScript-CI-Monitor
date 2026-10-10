@@ -22,6 +22,20 @@ final class ProjectTrackerViewModel {
     private var ghToken: String?
     private var ghTokenLookupFailed = false
 
+    enum TrackerError: LocalizedError {
+        case noToken
+        case storedTokenLacksAccess(APIError)
+
+        var errorDescription: String? {
+            switch self {
+            case .noToken:
+                return "No GitHub token available. Sign in or run `gh auth login`."
+            case .storedTokenLacksAccess(let underlying):
+                return "Stored token cannot read this repository (\(underlying.localizedDescription)) and `gh auth token` is unavailable."
+            }
+        }
+    }
+
     func startPolling(tokenProvider: @escaping @MainActor () -> String?) {
         pollingTask?.cancel()
         pollingTask = Task { [weak self] in
@@ -49,39 +63,10 @@ final class ProjectTrackerViewModel {
     }
 
     private func loadPullRequests(storedToken: String?) async {
-        // Prefer the gh token once it has proven necessary, otherwise try the PAT first.
-        if let ghToken, usingGhCLIToken {
-            await fetchPRs(with: ghToken)
-            return
-        }
-        guard let storedToken else {
-            if let gh = resolveGhToken() {
-                usingGhCLIToken = true
-                await fetchPRs(with: gh)
-            } else {
-                pullRequestError = "No GitHub token available."
-            }
-            return
-        }
         do {
-            pullRequests = try await apiClient.fetchOpenPullRequests(owner: Self.owner, repo: Self.repo, token: storedToken)
-            pullRequestError = nil
-            usingGhCLIToken = false
-        } catch let error as APIError where error.isScopeError {
-            if let gh = resolveGhToken() {
-                usingGhCLIToken = true
-                await fetchPRs(with: gh)
-            } else {
-                pullRequestError = "Stored token lacks GraphQL scope and `gh auth token` is unavailable."
+            pullRequests = try await withTokenFallback(storedToken: storedToken) { token in
+                try await self.apiClient.fetchOpenPullRequests(owner: Self.owner, repo: Self.repo, token: token)
             }
-        } catch {
-            pullRequestError = error.localizedDescription
-        }
-    }
-
-    private func fetchPRs(with token: String) async {
-        do {
-            pullRequests = try await apiClient.fetchOpenPullRequests(owner: Self.owner, repo: Self.repo, token: token)
             pullRequestError = nil
         } catch {
             pullRequestError = error.localizedDescription
@@ -89,16 +74,34 @@ final class ProjectTrackerViewModel {
     }
 
     private func loadIssues(storedToken: String?) async {
-        let token = (usingGhCLIToken ? ghToken : nil) ?? storedToken ?? resolveGhToken()
-        guard let token else {
-            issuesError = "No GitHub token available."
-            return
-        }
         do {
-            issues = try await apiClient.fetchOpenIssues(owner: Self.owner, repo: Self.repo, token: token)
+            issues = try await withTokenFallback(storedToken: storedToken) { token in
+                try await self.apiClient.fetchOpenIssues(owner: Self.owner, repo: Self.repo, token: token)
+            }
             issuesError = nil
         } catch {
             issuesError = error.localizedDescription
+        }
+    }
+
+    /// Runs `fetch` with the stored PAT first. If that token cannot see the resource, retries with
+    /// the `gh` CLI token and remembers that choice so later polls skip the failing PAT.
+    private func withTokenFallback<T>(storedToken: String?,
+                                      fetch: (String) async throws -> T) async throws -> T {
+        if usingGhCLIToken, let ghToken {
+            return try await fetch(ghToken)
+        }
+        guard let storedToken else {
+            guard let gh = resolveGhToken() else { throw TrackerError.noToken }
+            usingGhCLIToken = true
+            return try await fetch(gh)
+        }
+        do {
+            return try await fetch(storedToken)
+        } catch let error as APIError where error.isScopeError {
+            guard let gh = resolveGhToken() else { throw TrackerError.storedTokenLacksAccess(error) }
+            usingGhCLIToken = true
+            return try await fetch(gh)
         }
     }
 

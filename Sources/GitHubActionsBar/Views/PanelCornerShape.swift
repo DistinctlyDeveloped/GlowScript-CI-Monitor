@@ -108,8 +108,14 @@ private struct WindowCornerBacking: NSViewRepresentable {
 
 extension View {
     /// Rounds the panel to the system window radius; call on the outermost view.
-    func panelCorners() -> some View {
-        clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
-            .background(WindowCornerBacking())
+    /// Pass `enabled: false` when the same content is hosted in an ordinary window.
+    @ViewBuilder
+    func panelCorners(enabled: Bool = true) -> some View {
+        if enabled {
+            clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
+                .background(WindowCornerBacking())
+        } else {
+            self
+        }
     }
 }

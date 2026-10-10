@@ -79,11 +79,13 @@ actor GitHubAPIClient {
 
     // MARK: - Project tracker (PRs and issues)
 
-    func fetchOpenPullRequests(owner: String, repo: String, token: String) async throws -> [TrackedPullRequest] {
+    /// Walks every page of open PRs (100 per page, capped at `maxPages`).
+    func fetchOpenPullRequests(owner: String, repo: String, token: String, maxPages: Int = 10) async throws -> [TrackedPullRequest] {
         let query = """
-        query($owner: String!, $repo: String!) {
+        query($owner: String!, $repo: String!, $after: String) {
           repository(owner: $owner, name: $repo) {
-            pullRequests(states: OPEN, first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+            pullRequests(states: OPEN, first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+              pageInfo { hasNextPage endCursor }
               nodes {
                 number title isDraft reviewDecision mergeable updatedAt url
                 author { login }
@@ -94,39 +96,54 @@ actor GitHubAPIClient {
           }
         }
         """
-        var request = URLRequest(url: URL(string: baseURL + "/graphql")!)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 20
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "query": query,
-            "variables": ["owner": owner, "repo": repo],
-        ])
-        let (data, response) = try await session.data(for: request)
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw APIError.httpError(http.statusCode)
+        var all: [TrackedPullRequest] = []
+        var after: String?
+        for _ in 0..<maxPages {
+            var request = URLRequest(url: URL(string: baseURL + "/graphql")!)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 20
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            var variables: [String: Any] = ["owner": owner, "repo": repo]
+            if let after { variables["after"] = after }
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["query": query, "variables": variables])
+            let (data, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                throw APIError.httpError(http.statusCode)
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let envelope = try decoder.decode(PullRequestGraphQLResponse.self, from: data)
+            if let errors = envelope.errors, !errors.isEmpty, envelope.data?.repository == nil {
+                throw APIError.graphQL(errors.map(\.message).joined(separator: "; "))
+            }
+            guard let connection = envelope.data?.repository?.pullRequests else { break }
+            all.append(contentsOf: connection.nodes)
+            guard connection.pageInfo.hasNextPage, let cursor = connection.pageInfo.endCursor else { break }
+            after = cursor
         }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let envelope = try decoder.decode(PullRequestGraphQLResponse.self, from: data)
-        if let errors = envelope.errors, !errors.isEmpty, envelope.data?.repository == nil {
-            throw APIError.graphQL(errors.map(\.message).joined(separator: "; "))
-        }
-        return envelope.data?.repository?.pullRequests.nodes ?? []
+        return all
     }
 
-    func fetchOpenIssues(owner: String, repo: String, token: String) async throws -> [TrackedIssue] {
-        let request = makeRequest(
-            path: "/repos/\(owner)/\(repo)/issues",
-            queryItems: [
-                URLQueryItem(name: "state", value: "open"),
-                URLQueryItem(name: "per_page", value: "100"),
-            ],
-            token: token
-        )
-        let items: [TrackedIssue] = try await perform(request)
-        return items.filter { $0.pullRequest == nil }
+    /// The REST issues endpoint also returns pull requests, so a page of 100 rarely holds 100
+    /// issues; keep paging until GitHub returns a short page (capped at `maxPages`).
+    func fetchOpenIssues(owner: String, repo: String, token: String, maxPages: Int = 10) async throws -> [TrackedIssue] {
+        var all: [TrackedIssue] = []
+        for page in 1...maxPages {
+            let request = makeRequest(
+                path: "/repos/\(owner)/\(repo)/issues",
+                queryItems: [
+                    URLQueryItem(name: "state", value: "open"),
+                    URLQueryItem(name: "per_page", value: "100"),
+                    URLQueryItem(name: "page", value: String(page)),
+                ],
+                token: token
+            )
+            let items: [TrackedIssue] = try await perform(request)
+            all.append(contentsOf: items.filter { $0.pullRequest == nil })
+            if items.count < 100 { break }
+        }
+        return all
     }
 
     // MARK: - Helpers
@@ -207,10 +224,19 @@ enum APIError: LocalizedError {
         return false
     }
 
+    /// True when the token was accepted but is not allowed to see the resource (fine-grained PAT
+    /// without the permission, or a classic token missing a scope). GraphQL reports this as an
+    /// error payload on HTTP 200, so the message text has to be inspected.
     var isScopeError: Bool {
         switch self {
-        case .httpError(401), .httpError(403): return true
-        default: return false
+        case .httpError(401), .httpError(403):
+            return true
+        case .graphQL(let message):
+            let lowered = message.lowercased()
+            return lowered.contains("not accessible") || lowered.contains("scope")
+                || lowered.contains("forbidden") || lowered.contains("permission")
+        default:
+            return false
         }
     }
 }

@@ -6,7 +6,8 @@ struct PullRequestGraphQLResponse: Decodable, Sendable {
     struct GraphQLError: Decodable, Sendable { let message: String }
     struct DataNode: Decodable, Sendable { let repository: RepositoryNode? }
     struct RepositoryNode: Decodable, Sendable { let pullRequests: Connection }
-    struct Connection: Decodable, Sendable { let nodes: [TrackedPullRequest] }
+    struct Connection: Decodable, Sendable { let nodes: [TrackedPullRequest]; let pageInfo: PageInfo }
+    struct PageInfo: Decodable, Sendable { let hasNextPage: Bool; let endCursor: String? }
 
     let data: DataNode?
     let errors: [GraphQLError]?

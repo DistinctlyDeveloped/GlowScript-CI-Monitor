@@ -4,6 +4,7 @@ struct IssuesView: View {
     @Bindable var tracker: ProjectTrackerViewModel
     @State private var searchText = ""
     @State private var labelFilter = ""
+    private let router = DeepLinkRouter.shared
 
     private var allLabels: [String] {
         Array(Set(tracker.issues.flatMap { $0.labels.map(\.name) })).sorted()
@@ -13,7 +14,7 @@ struct IssuesView: View {
         tracker.issues.filter { issue in
             let matchesText = searchText.isEmpty
                 || issue.title.localizedCaseInsensitiveContains(searchText)
-                || "#\(issue.number)".contains(searchText)
+                || issueNumberText(issue.number).contains(searchText)
                 || issue.assignees.contains { $0.login.localizedCaseInsensitiveContains(searchText) }
             let matchesLabel = labelFilter.isEmpty || issue.labels.contains { $0.name == labelFilter }
             return matchesText && matchesLabel
@@ -34,13 +35,20 @@ struct IssuesView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
 
+            if tracker.usingGhCLIToken {
+                TrackerNotice(message: "The stored token cannot read pull requests or issues. Using the token from `gh auth token` instead.")
+            }
             if let error = tracker.issuesError {
                 TrackerNotice(message: error, tint: .orange)
             }
 
             if filtered.isEmpty {
-                ContentUnavailableView(
-                    tracker.isLoading && tracker.lastRefresh == nil ? "Loading issues…" : "No matching issues",
+                TrackerEmptyState(
+                    isLoading: tracker.isLoading && tracker.lastRefresh == nil,
+                    error: tracker.issues.isEmpty ? tracker.issuesError : nil,
+                    loadingTitle: "Loading issues…",
+                    emptyTitle: tracker.issues.isEmpty ? "No open issues" : "No matching issues",
+                    failedTitle: "Could not load issues",
                     systemImage: "exclamationmark.circle")
             } else {
                 List(filtered) { issue in
@@ -52,6 +60,14 @@ struct IssuesView: View {
             }
         }
         .navigationSubtitle("\(filtered.count) of \(tracker.issues.count) open issues")
+        .onAppear { applyDeepLink(router.trackerLink) }
+        .onChange(of: router.trackerLink) { _, link in applyDeepLink(link) }
+    }
+
+    private func applyDeepLink(_ link: TrackerDeepLink?) {
+        guard let link, link.section == .issues else { return }
+        if let filter = link.filter { searchText = filter }
+        if let label = link.label { labelFilter = label }
     }
 }
 
@@ -61,7 +77,7 @@ struct IssueRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("#\(issue.number)")
+                Text(issueNumberText(issue.number))
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Text(issue.title)
@@ -72,7 +88,7 @@ struct IssueRow: View {
                     Label("\(issue.comments)", systemImage: "bubble.left")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(issue.updatedAt, style: .relative)
+                RelativeAgoText(date: issue.updatedAt)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -3,6 +3,9 @@ import SwiftUI
 struct MainPopoverView: View {
     @Bindable var viewModel: WorkflowViewModel
     var showsTrackerButton = false
+    /// Inside the tracker window the view is a plain pane: no material backing and no
+    /// panel corner masking (which would otherwise reshape the host window).
+    var embedded = false
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -18,8 +21,8 @@ struct MainPopoverView: View {
                 authenticatedContent
             }
         }
-        .background(.ultraThinMaterial)
-        .panelCorners()
+        .background(embedded ? AnyShapeStyle(.clear) : AnyShapeStyle(.ultraThinMaterial))
+        .panelCorners(enabled: !embedded)
     }
 
     private var authenticatedContent: some View {

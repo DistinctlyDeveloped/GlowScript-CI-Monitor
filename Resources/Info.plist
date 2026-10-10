@@ -20,5 +20,16 @@
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.hugobourget.Octowatch.deeplink</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>glowscript-ci</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>

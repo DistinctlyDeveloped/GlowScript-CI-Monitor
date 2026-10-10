@@ -2,21 +2,41 @@ import SwiftUI
 
 struct PullRequestsView: View {
     @Bindable var tracker: ProjectTrackerViewModel
+    @State private var searchText = ""
+    private let router = DeepLinkRouter.shared
+
+    private var filtered: [TrackedPullRequest] {
+        guard !searchText.isEmpty else { return tracker.pullRequests }
+        return tracker.pullRequests.filter { pr in
+            pr.title.localizedCaseInsensitiveContains(searchText)
+                || issueNumberText(pr.number).contains(searchText)
+                || pr.authorLogin.localizedCaseInsensitiveContains(searchText)
+                || pr.closingIssueNumbers.contains { issueNumberText($0).contains(searchText) }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            TextField("Filter by title, number, author, or closed issue", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
             if tracker.usingGhCLIToken {
-                TrackerNotice(message: "Stored token lacks GraphQL scope. Using the token from `gh auth token` for pull requests.")
+                TrackerNotice(message: "The stored token cannot read pull requests or issues. Using the token from `gh auth token` instead.")
             }
             if let error = tracker.pullRequestError {
                 TrackerNotice(message: error, tint: .orange)
             }
-            if tracker.pullRequests.isEmpty {
-                ContentUnavailableView(
-                    tracker.isLoading && tracker.lastRefresh == nil ? "Loading pull requests…" : "No open pull requests",
+            if filtered.isEmpty {
+                TrackerEmptyState(
+                    isLoading: tracker.isLoading && tracker.lastRefresh == nil,
+                    error: tracker.pullRequests.isEmpty ? tracker.pullRequestError : nil,
+                    loadingTitle: "Loading pull requests…",
+                    emptyTitle: tracker.pullRequests.isEmpty ? "No open pull requests" : "No matching pull requests",
+                    failedTitle: "Could not load pull requests",
                     systemImage: "arrow.triangle.pull")
             } else {
-                List(tracker.pullRequests) { pr in
+                List(filtered) { pr in
                     PullRequestRow(pr: pr)
                         .contentShape(Rectangle())
                         .onTapGesture { openInBrowser(pr.url) }
@@ -24,7 +44,14 @@ struct PullRequestsView: View {
                 .listStyle(.inset)
             }
         }
-        .navigationSubtitle("\(tracker.pullRequests.count) open in \(ProjectTrackerViewModel.owner)/\(ProjectTrackerViewModel.repo)")
+        .navigationSubtitle("\(filtered.count) of \(tracker.pullRequests.count) open in \(ProjectTrackerViewModel.owner)/\(ProjectTrackerViewModel.repo)")
+        .onAppear { applyDeepLink(router.trackerLink) }
+        .onChange(of: router.trackerLink) { _, link in applyDeepLink(link) }
+    }
+
+    private func applyDeepLink(_ link: TrackerDeepLink?) {
+        guard let link, link.section == .pullRequests, let filter = link.filter else { return }
+        searchText = filter
     }
 }
 
@@ -34,14 +61,14 @@ struct PullRequestRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("#\(pr.number)")
+                Text(issueNumberText(pr.number))
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Text(pr.title)
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                 Spacer()
-                Text(pr.updatedAt, style: .relative)
+                RelativeAgoText(date: pr.updatedAt)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -52,8 +79,14 @@ struct PullRequestRow: View {
                 if pr.isDraft {
                     Badge(text: "Draft", color: .gray)
                 }
-                Badge(text: reviewLabel, color: reviewColor)
+                // GitHub returns no decision when the repo requires no reviews; a chip for that is noise.
+                if let decision = pr.reviewDecision, !decision.isEmpty {
+                    Badge(text: reviewLabel, color: reviewColor)
+                }
                 Badge(text: checksLabel, color: checksColor)
+                    .help(pr.checkState == nil
+                          ? "GitHub returned no check rollup. A fine-grained token needs Checks and Commit statuses read access to see CI results."
+                          : "Combined status of the latest commit's checks")
                 Badge(text: mergeLabel, color: mergeColor)
                 if !pr.closingIssueNumbers.isEmpty {
                     Badge(text: "Closes " + pr.closingIssueNumbers.map { "#\($0)" }.joined(separator: ", "), color: .purple)
@@ -87,7 +120,7 @@ struct PullRequestRow: View {
         case "SUCCESS": return "Checks passing"
         case "FAILURE", "ERROR": return "Checks failing"
         case "PENDING", "EXPECTED": return "Checks running"
-        case nil: return "No checks"
+        case nil: return "Checks unavailable"
         case .some(let other): return other.capitalized
         }
     }
