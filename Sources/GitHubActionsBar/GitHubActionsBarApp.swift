@@ -6,7 +6,7 @@ struct GitHubActionsBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MainPopoverView(viewModel: viewModel)
+            MainPopoverView(viewModel: viewModel, showsTrackerButton: true)
                 .frame(width: min(920, (NSScreen.main?.visibleFrame.width ?? 1000) - 40),
                        height: min(720, (NSScreen.main?.visibleFrame.height ?? 800) - 60))
         } label: {
@@ -14,5 +14,11 @@ struct GitHubActionsBarApp: App {
                          ciAlert: !(viewModel.localSnapshot?.activeAlerts.isEmpty ?? true))
         }
         .menuBarExtraStyle(.window)
+
+        Window("GlowScript Project Tracker", id: "project-tracker") {
+            ProjectTrackerWindow(viewModel: viewModel)
+        }
+        .defaultSize(width: 1100, height: 750)
+        .windowResizability(.contentMinSize)
     }
 }

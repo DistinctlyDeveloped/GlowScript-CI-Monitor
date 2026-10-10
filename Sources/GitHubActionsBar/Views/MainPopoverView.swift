@@ -2,6 +2,8 @@ import SwiftUI
 
 struct MainPopoverView: View {
     @Bindable var viewModel: WorkflowViewModel
+    var showsTrackerButton = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
@@ -25,6 +27,10 @@ struct MainPopoverView: View {
             HeaderView(
                 onRefresh: { viewModel.refresh() },
                 onSettings: { viewModel.showSettings = true },
+                onOpenTracker: showsTrackerButton ? {
+                    openWindow(id: "project-tracker")
+                    NSApp.activate(ignoringOtherApps: true)
+                } : nil,
                 isLoading: viewModel.isLoading
             )
 

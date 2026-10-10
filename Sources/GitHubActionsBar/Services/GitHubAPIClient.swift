@@ -77,6 +77,58 @@ actor GitHubAPIClient {
         return try await perform(request)
     }
 
+    // MARK: - Project tracker (PRs and issues)
+
+    func fetchOpenPullRequests(owner: String, repo: String, token: String) async throws -> [TrackedPullRequest] {
+        let query = """
+        query($owner: String!, $repo: String!) {
+          repository(owner: $owner, name: $repo) {
+            pullRequests(states: OPEN, first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+              nodes {
+                number title isDraft reviewDecision mergeable updatedAt url
+                author { login }
+                commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+                closingIssuesReferences(first: 20) { nodes { number } }
+              }
+            }
+          }
+        }
+        """
+        var request = URLRequest(url: URL(string: baseURL + "/graphql")!)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "query": query,
+            "variables": ["owner": owner, "repo": repo],
+        ])
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw APIError.httpError(http.statusCode)
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let envelope = try decoder.decode(PullRequestGraphQLResponse.self, from: data)
+        if let errors = envelope.errors, !errors.isEmpty, envelope.data?.repository == nil {
+            throw APIError.graphQL(errors.map(\.message).joined(separator: "; "))
+        }
+        return envelope.data?.repository?.pullRequests.nodes ?? []
+    }
+
+    func fetchOpenIssues(owner: String, repo: String, token: String) async throws -> [TrackedIssue] {
+        let request = makeRequest(
+            path: "/repos/\(owner)/\(repo)/issues",
+            queryItems: [
+                URLQueryItem(name: "state", value: "open"),
+                URLQueryItem(name: "per_page", value: "100"),
+            ],
+            token: token
+        )
+        let items: [TrackedIssue] = try await perform(request)
+        return items.filter { $0.pullRequest == nil }
+    }
+
     // MARK: - Helpers
 
     private func makeRequest(
@@ -135,9 +187,12 @@ actor GitHubAPIClient {
 
 enum APIError: LocalizedError {
     case httpError(Int)
+    case graphQL(String)
 
     var errorDescription: String? {
         switch self {
+        case .graphQL(let message):
+            return "GitHub GraphQL error: \(message)"
         case .httpError(401):
             return "Invalid or expired token. Please sign in again."
         case .httpError(403):
@@ -150,5 +205,12 @@ enum APIError: LocalizedError {
     var isAuthError: Bool {
         if case .httpError(401) = self { return true }
         return false
+    }
+
+    var isScopeError: Bool {
+        switch self {
+        case .httpError(401), .httpError(403): return true
+        default: return false
+        }
     }
 }

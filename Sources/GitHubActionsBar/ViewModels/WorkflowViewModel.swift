@@ -67,6 +67,9 @@ final class WorkflowViewModel {
     private var previousInProgressIds: Set<Int64> = []
     private var token: String?
 
+    /// Shared with the project tracker window so it reuses the same credential.
+    var currentToken: String? { token }
+
     // MARK: - Init
 
     init() {
