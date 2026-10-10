@@ -3,6 +3,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var viewModel: WorkflowViewModel
+    /// The tracker window toolbar's gear toggles settings, so it hides this back header.
+    var showsHeader = true
     let onBack: () -> Void
 
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
@@ -15,28 +17,29 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack {
-                Button(action: onBack) {
+            if showsHeader {
+                HStack {
+                    Button(action: onBack) {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.plain)
+
+                    Spacer()
+
+                    Text("Settings")
+                        .font(.headline)
+
+                    Spacer()
+
+                    // Invisible balance element
                     Label("Back", systemImage: "chevron.left")
+                        .hidden()
                 }
-                .buttonStyle(.plain)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
 
-                Spacer()
-
-                Text("Settings")
-                    .font(.headline)
-
-                Spacer()
-
-                // Invisible balance element
-                Label("Back", systemImage: "chevron.left")
-                    .hidden()
+                Divider()
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
-            Divider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {

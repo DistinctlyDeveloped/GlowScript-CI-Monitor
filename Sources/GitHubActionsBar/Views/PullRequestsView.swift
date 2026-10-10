@@ -44,7 +44,7 @@ struct PullRequestsView: View {
                 .listStyle(.inset)
             }
         }
-        .navigationSubtitle("\(filtered.count) of \(tracker.pullRequests.count) open in \(ProjectTrackerViewModel.owner)/\(ProjectTrackerViewModel.repo)")
+        .trackerSubtitle("\(filtered.count) of \(tracker.pullRequests.count) open in \(ProjectTrackerViewModel.owner)/\(ProjectTrackerViewModel.repo)")
         .onAppear { applyDeepLink(router.trackerLink) }
         .onChange(of: router.trackerLink) { _, link in applyDeepLink(link) }
     }

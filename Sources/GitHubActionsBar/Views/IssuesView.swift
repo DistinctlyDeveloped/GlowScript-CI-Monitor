@@ -59,7 +59,7 @@ struct IssuesView: View {
                 .listStyle(.inset)
             }
         }
-        .navigationSubtitle("\(filtered.count) of \(tracker.issues.count) open issues")
+        .trackerSubtitle("\(filtered.count) of \(tracker.issues.count) open issues")
         .onAppear { applyDeepLink(router.trackerLink) }
         .onChange(of: router.trackerLink) { _, link in applyDeepLink(link) }
     }

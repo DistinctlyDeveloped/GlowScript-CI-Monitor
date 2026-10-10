@@ -3,8 +3,9 @@ import SwiftUI
 struct MainPopoverView: View {
     @Bindable var viewModel: WorkflowViewModel
     var showsTrackerButton = false
-    /// Inside the tracker window the view is a plain pane: no material backing and no
-    /// panel corner masking (which would otherwise reshape the host window).
+    /// Inside the tracker window the view is a plain pane: no material backing, no
+    /// panel corner masking (which would otherwise reshape the host window), and no
+    /// header of its own because the window toolbar carries title, refresh, and settings.
     var embedded = false
     @Environment(\.openWindow) private var openWindow
 
@@ -13,7 +14,7 @@ struct MainPopoverView: View {
             if !viewModel.isAuthenticated {
                 SignInView(viewModel: viewModel)
             } else if viewModel.showSettings {
-                SettingsView(viewModel: viewModel) {
+                SettingsView(viewModel: viewModel, showsHeader: !embedded) {
                     viewModel.showSettings = false
                     viewModel.refresh()
                 }
@@ -27,17 +28,19 @@ struct MainPopoverView: View {
 
     private var authenticatedContent: some View {
         VStack(spacing: 0) {
-            HeaderView(
-                onRefresh: { viewModel.refresh() },
-                onSettings: { viewModel.showSettings = true },
-                onOpenTracker: showsTrackerButton ? {
-                    openWindow(id: "project-tracker")
-                    NSApp.activate(ignoringOtherApps: true)
-                } : nil,
-                isLoading: viewModel.isLoading
-            )
+            if !embedded {
+                HeaderView(
+                    onRefresh: { viewModel.refresh() },
+                    onSettings: { viewModel.showSettings = true },
+                    onOpenTracker: showsTrackerButton ? {
+                        openWindow(id: "project-tracker")
+                        NSApp.activate(ignoringOtherApps: true)
+                    } : nil,
+                    isLoading: viewModel.isLoading
+                )
 
-            Divider()
+                Divider()
+            }
 
             if let error = viewModel.errorMessage {
                 errorBanner(error)
